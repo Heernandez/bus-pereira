@@ -39,3 +39,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+
+.env
+
+src/data/mockData.json
+src/data/bkp.mockData.json.example
