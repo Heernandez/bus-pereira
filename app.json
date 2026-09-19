@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Mi Ruta - Pereira",
+    "slug": "bus-pereira",
+    "scheme": "buspereira",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0b6f50"
+    },
+    "userInterfaceStyle": "light",
+    "plugins": [
+      [
+        "react-native-maps",
+        {
+          "androidGoogleMapsApiKey": "AIzaSyBCzz-nTmj5SMJ6YUDG5-9ojsU72kPyvEw",
+          "iosGoogleMapsApiKey": "AIzaSyBCzz-nTmj5SMJ6YUDG5-9ojsU72kPyvEw"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Esta app necesita acceder a tu ubicación para mostrarte paradas cercanas y ubicarte en el mapa.",
+          "locationWhenInUsePermission": "Esta app necesita acceder a tu ubicación para mostrarte paradas cercanas y ubicarte en el mapa."
+        }
+      ],
+      "@react-native-google-signin/google-signin"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrarte tu posición en el mapa y sugerirte paradas cercanas."
+      }
+    },
+    "android": {
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.heernandez.buspereira"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

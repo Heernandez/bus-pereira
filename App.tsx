@@ -1,0 +1,179 @@
+import React from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { ExploreScreen } from './src/screens/ExploreScreen';
+import { TripScreen } from './src/screens/TripScreen';
+import { AccountScreen } from './src/screens/AccountScreen';
+import { PassScreen } from './src/screens/PassScreen';
+
+type RootTabParamList = {
+  Explorar: undefined;
+  Viaje: undefined;
+  RutasFavoritas: undefined;
+  Pasabordo: undefined;
+  Cuenta: undefined;
+};
+
+const Tab = createBottomTabNavigator<RootTabParamList>();
+
+function PlaceholderScreen({
+  title,
+  subtitle,
+  icon,
+}: {
+  title: string;
+  subtitle: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      style={[
+        styles.placeholderContainer,
+        { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 96 },
+      ]}
+    >
+      <View style={styles.iconCircle}>
+        <Ionicons name={icon} size={32} color="#1f6feb" />
+      </View>
+      <Text style={styles.placeholderTitle}>{title}</Text>
+      <Text style={styles.placeholderSubtitle}>{subtitle}</Text>
+    </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <NavigationContainer>
+      <Tab.Navigator
+        initialRouteName="Explorar"
+        screenOptions={({ route }) => ({
+          headerShown: false,
+          tabBarStyle: {
+            ...styles.tabBar,
+            height: 78 + insets.bottom,
+            paddingBottom: Math.max(insets.bottom + 8, 10),
+          },
+          tabBarActiveTintColor: '#1f6feb',
+          tabBarInactiveTintColor: '#64748b',
+          tabBarLabelStyle: styles.tabLabel,
+          tabBarIcon: ({ color, size, focused }) => {
+            const iconMap: Record<string, keyof typeof Ionicons.glyphMap> = {
+              Explorar: 'navigate',
+              Viaje: 'ticket',
+              RutasFavoritas: 'star',
+              Pasabordo: 'card',
+              Cuenta: 'person',
+            };
+
+            const iconName = iconMap[route.name] ?? 'ellipse';
+            return <Ionicons name={iconName} size={size} color={focused ? '#1f6feb' : color} />;
+          },
+        })}
+      >
+        <Tab.Screen
+          name="Explorar"
+          component={ExploreScreen}
+          options={{ tabBarLabel: 'Explorar' }}
+        />
+        <Tab.Screen
+          name="Viaje"
+          component={TripScreen}
+          options={{
+            tabBarLabel: 'Viaje',
+          }}
+        />
+        <Tab.Screen
+          name="RutasFavoritas"
+          options={{ tabBarLabel: 'Rutas Favoritas' }}
+        >
+          {() => (
+            <PlaceholderScreen
+              title="Rutas favoritas"
+              subtitle="Guarda tus recorridos preferidos para acceder rápido."
+              icon="star"
+            />
+          )}
+        </Tab.Screen>
+        <Tab.Screen
+          name="Pasabordo"
+          component={PassScreen}
+          options={{ tabBarLabel: 'Pasabordo' }}
+        />
+        <Tab.Screen
+          name="Cuenta"
+          component={AccountScreen}
+          options={{ tabBarLabel: 'Cuenta' }}
+        />
+      </Tab.Navigator>
+    </NavigationContainer>
+  );
+}
+
+const styles = StyleSheet.create({
+  tabBar: {
+    height: 78,
+    paddingBottom: 10,
+    paddingTop: 8,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    borderTopWidth: 0,
+    backgroundColor: '#ffffff',
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: -2 },
+    elevation: 8,
+  },
+  tabLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  placeholderContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 24,
+  },
+  iconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#dbeafe',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  placeholderTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  placeholderSubtitle: {
+    fontSize: 15,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+});
