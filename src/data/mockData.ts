@@ -23,7 +23,7 @@ export type RouteVariant = {
   destinationName: string;
   stopSequence: string[];
   geometry: {
-    provider: 'mock' | 'google-routes';
+    provider: 'mock' | 'google-routes' | 'manual';
     status: 'pending' | 'ready';
     encodedPolyline: string | null;
     coordinates: Coordinate[];
@@ -45,13 +45,13 @@ export type RouteOption = {
 
 export const defaultRegion = data.city.defaultRegion;
 
-export const mockStops: MockLocation[] = data.stops;
+export const mockStops: MockLocation[] = data.stops as MockLocation[];
 
-export const routeOptions: RouteOption[] = data.routes;
+export const routeOptions: RouteOption[] = data.routes as RouteOption[];
 
 export const getStopById = (id: string) => mockStops.find((stop) => stop.id === id);
 
-export const getVariantCoordinates = (variant: RouteVariant): Coordinate[] => {
+export const getVariantCoordinates = (variant: RouteVariant, stops: MockLocation[] = mockStops): Coordinate[] => {
   if (variant.geometry.coordinates.length > 0) {
     return variant.geometry.coordinates;
   }
@@ -64,6 +64,6 @@ export const getVariantCoordinates = (variant: RouteVariant): Coordinate[] => {
   }
 
   return variant.stopSequence
-    .map((stopId) => getStopById(stopId))
+    .map((stopId) => stops.find(stop => stop.id === stopId))
     .filter((stop): stop is MockLocation => Boolean(stop));
 };

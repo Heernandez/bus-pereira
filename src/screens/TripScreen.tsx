@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import { useViewTiming } from '../hooks/useViewTiming';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Modal,
@@ -10,14 +11,16 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import { useIsFocused } from '@react-navigation/native';
+import { useLocationAccess } from '../context/LocationAccess';
+import { LocationGate } from '../components/LocationGate';
+import { DataStatus } from '../components/DataStatus';
+import { useRemoteData } from '../hooks/useRemoteData';
+import { getCatalog, USE_DUMMY_DATA } from '../services/transit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  defaultRegion,
   getVariantCoordinates,
-  mockStops,
-  routeOptions,
   type MockLocation,
 } from '../data/mockData';
 
@@ -25,18 +28,27 @@ type Point = MockLocation & { isCurrent?: boolean };
 
 const isTransitPoint = (point: Point) => point.type === 'stop' || point.type === 'station';
 
-const getNearestStop = (point: Point) =>
-  mockStops.reduce((nearest, stop) => {
+const getNearestStop = (point: Point, stops: MockLocation[]) =>
+  stops.filter(stop => stop.type !== 'poi').reduce<MockLocation | undefined>((nearest, stop) => {
+    if (!nearest) return stop;
     const nearestDistance =
       Math.abs(nearest.latitude - point.latitude) + Math.abs(nearest.longitude - point.longitude);
     const stopDistance =
       Math.abs(stop.latitude - point.latitude) + Math.abs(stop.longitude - point.longitude);
 
     return stopDistance < nearestDistance ? stop : nearest;
-  });
+  }, undefined);
 
 export function TripScreen() {
   const insets = useSafeAreaInsets();
+  const focused = useIsFocused();
+  const onViewLayout = useViewTiming('Viaje', focused);
+  const location = useLocationAccess();
+  const catalog = useRemoteData(getCatalog);
+  const mockStops = catalog.data?.stops ?? [];
+  const routeOptions = catalog.data?.routes ?? [];
+  const canInteract = location.state === 'ready' && focused;
+  useEffect(() => { if (focused) void location.refresh(); }, [focused, location.refresh]);
   const [origin, setOrigin] = useState<Point | null>(null);
   const [destination, setDestination] = useState<Point | null>(null);
   const [selectionMode, setSelectionMode] = useState<'origin' | 'destination'>('origin');
@@ -44,6 +56,8 @@ export function TripScreen() {
   const [searchText, setSearchText] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routesCollapsed, setRoutesCollapsed] = useState(false);
+
+  useEffect(() => { if (!canInteract) setPickerVisible(false); }, [canInteract]);
 
   const filteredLocations = useMemo(() => {
     const query = searchText.trim().toLowerCase();
@@ -56,25 +70,30 @@ export function TripScreen() {
       (item) =>
         item.name.toLowerCase().includes(query) || item.subtitle.toLowerCase().includes(query),
     );
-  }, [searchText]);
+  }, [searchText, catalog.data]);
 
   const routeLines = useMemo(() => {
     if (!origin || !destination) {
       return [];
     }
 
-    const originStation = isTransitPoint(origin) ? origin : getNearestStop(origin);
-    const destinationStation = isTransitPoint(destination) ? destination : getNearestStop(destination);
+    const originStation = isTransitPoint(origin) ? origin : getNearestStop(origin, mockStops);
+    const destinationStation = isTransitPoint(destination) ? destination : getNearestStop(destination, mockStops);
 
-    return routeOptions.map((route) => {
-      const variant = route.variants[0];
-      const sequenceCoordinates = getVariantCoordinates(variant);
+    if (!originStation || !destinationStation) return [];
+    return routeOptions.flatMap((route) => {
+      const variant = USE_DUMMY_DATA ? route.variants[0] : route.variants.find(item => {
+        const from = item.stopSequence.indexOf(originStation.id);
+        return from >= 0 && item.stopSequence.indexOf(destinationStation.id, from + 1) > from;
+      });
+      if (!variant) return [];
+      const sequenceCoordinates = getVariantCoordinates(variant, mockStops);
 
       return {
         ...route,
         originStation,
         destinationStation,
-        transitCoordinates: variant.geometry.coordinates.length
+        transitCoordinates: !USE_DUMMY_DATA ? sequenceCoordinates : variant.geometry.coordinates.length
           ? [originStation, ...variant.geometry.coordinates, destinationStation]
           : [originStation, ...sequenceCoordinates, destinationStation],
         walkingSegments: [
@@ -83,17 +102,18 @@ export function TripScreen() {
         ],
       };
     });
-  }, [destination, origin]);
+  }, [destination, origin, catalog.data]);
 
   const visibleRoutes = selectedRouteId
     ? routeLines.filter((route) => route.id === selectedRouteId)
     : routeLines;
 
-  const selectPoint = (point: Point) => {
+  const selectPoint = (point: Point, mode = selectionMode) => {
+    if (!canInteract) return;
     setSelectedRouteId(null);
     setRoutesCollapsed(false);
 
-    if (selectionMode === 'origin') {
+    if (mode === 'origin') {
       setOrigin(point);
       setSelectionMode('destination');
     } else {
@@ -105,26 +125,12 @@ export function TripScreen() {
   };
 
   const selectCurrentLocation = async (mode: 'origin' | 'destination') => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-
-    if (status !== 'granted') {
-      return;
-    }
-
-    const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-    });
-
-    setSelectionMode(mode);
+    const coordinate = await location.locate();
+    if (!coordinate) return;
     selectPoint({
-      id: `current-${mode}`,
-      name: 'Mi ubicación actual',
-      subtitle: 'Ubicación del teléfono',
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-      type: 'Punto de interés',
-      isCurrent: true,
-    });
+      id: `current-${mode}`, name: 'Mi ubicación actual', subtitle: 'Ubicación del teléfono',
+      ...coordinate, type: 'poi', isCurrent: true,
+    }, mode);
   };
 
   const selectMapPoint = (coordinate: { latitude: number; longitude: number }) => {
@@ -134,7 +140,7 @@ export function TripScreen() {
       subtitle: 'Punto elegido en el mapa',
       latitude: coordinate.latitude,
       longitude: coordinate.longitude,
-      type: 'Punto de interés',
+      type: 'poi',
     });
   };
 
@@ -166,12 +172,19 @@ export function TripScreen() {
     setPickerVisible(false);
   };
 
+  if (!catalog.data) return <LocationGate><View onLayout={onViewLayout} style={[styles.container, { justifyContent: 'center' }]}><DataStatus error={catalog.error} retry={catalog.reload} /></View></LocationGate>;
+  const defaultRegion = catalog.data.city.defaultRegion;
   return (
-    <View style={styles.container}>
+    <LocationGate><View onLayout={onViewLayout} style={styles.container}>
       <MapView
         provider={PROVIDER_GOOGLE}
         style={StyleSheet.absoluteFill}
         initialRegion={defaultRegion}
+        scrollEnabled={canInteract}
+        zoomEnabled={canInteract}
+        rotateEnabled={canInteract}
+        pitchEnabled={canInteract}
+        showsUserLocation={canInteract}
         showsCompass
         onPress={(event) => selectMapPoint(event.nativeEvent.coordinate)}
       >
@@ -300,6 +313,8 @@ export function TripScreen() {
           </Pressable>
         </View>
 
+        {location.positionError && <Pressable onPress={() => void location.locate()}><Text style={styles.mapHint}>{location.positionError} Toca para reintentar.</Text></Pressable>}
+        {!USE_DUMMY_DATA && origin && destination && routeLines.length === 0 && <Text style={styles.mapHint}>No encontramos una ruta directa entre estas paradas. La búsqueda con transbordos aún no está disponible.</Text>}
         <Text style={styles.mapHint}>
           <Ionicons name="hand-left-outline" size={13} color="#64748b" />{' '}
           También puedes tocar el mapa para marcar el {selectionMode === 'origin' ? 'origen' : 'destino'}.
@@ -314,7 +329,7 @@ export function TripScreen() {
               <Text style={styles.routesSubtitle}>
                 {routeLines.some((route) => route.walkingSegments.length > 0)
                   ? 'Línea continua: bus · punteada: caminata'
-                  : 'Opciones simuladas para tu recorrido'}
+                  : USE_DUMMY_DATA ? 'Opciones simuladas para tu recorrido' : 'Rutas directas que conectan tus paradas'}
               </Text>
             </View>
             <View style={styles.routeCount}>
@@ -380,7 +395,7 @@ export function TripScreen() {
         </Pressable>
       )}
 
-      <Modal transparent animationType="slide" visible={pickerVisible}>
+      <Modal transparent animationType="slide" visible={pickerVisible && canInteract} onRequestClose={() => setPickerVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setPickerVisible(false)} />
         <View style={[styles.modalContainer, { paddingBottom: 24 + insets.bottom }]}>
           <View style={styles.modalHeader}>
@@ -434,12 +449,12 @@ export function TripScreen() {
               </Pressable>
             )}
             ListEmptyComponent={
-              <Text style={styles.emptyState}>No encontramos esa ubicación en los datos simulados.</Text>
+              <Text style={styles.emptyState}>No encontramos esa ubicación.</Text>
             }
           />
         </View>
       </Modal>
-    </View>
+    </View></LocationGate>
   );
 }
 

@@ -1,60 +1,17 @@
-import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { GoogleSignin, isSuccessResponse } from '@react-native-google-signin/google-signin';
+import { useIsFocused } from '@react-navigation/native';
+import { useViewTiming } from '../hooks/useViewTiming';
+import React from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
-
-type Account = {
-  name: string;
-  email: string;
-  picture: string;
-  provider: 'mock' | 'google';
-};
+import { useSession } from '../context/Session';
 
 export function AccountScreen() {
+  const onViewLayout = useViewTiming('Cuenta', useIsFocused());
   const insets = useSafeAreaInsets();
-  const [account, setAccount] = useState<Account | null>(null);
-  const [isConfigured, setIsConfigured] = useState(false);
-
-  useEffect(() => {
-    GoogleSignin.configure({
-      webClientId: googleWebClientId || undefined,
-      offlineAccess: true,
-    });
-    setIsConfigured(Boolean(googleWebClientId));
-  }, []);
-
-  const signIn = async () => {
-    if (!isConfigured) {
-      Alert.alert(
-        'Google aún no configurado',
-        'Agrega los client IDs en .env.local y reinicia Metro para probar el OAuth real.',
-      );
-      return;
-    }
-
-    try {
-      await GoogleSignin.hasPlayServices();
-      const result = await GoogleSignin.signIn();
-
-      if (isSuccessResponse(result)) {
-        setAccount({
-          name: result.data.user.name ?? 'Usuario Google',
-          email: result.data.user.email,
-          picture: result.data.user.photo ?? 'google',
-          provider: 'google',
-        });
-      }
-    } catch (error) {
-      console.error('[GoogleAuth] Error de Google Sign-In nativo', error);
-      Alert.alert('No se pudo iniciar sesión', 'Google canceló o rechazó la autenticación.');
-    }
-  };
-
+  const { account, busy, isConfigured, restoreError, restoreSession, signIn, signOut } = useSession();
   return (
-    <ScrollView
+    <ScrollView onLayout={onViewLayout}
       style={styles.container}
       contentContainerStyle={[
         styles.content,
@@ -65,7 +22,23 @@ export function AccountScreen() {
       <Text style={styles.title}>Cuenta</Text>
       <Text style={styles.subtitle}>Administra tu identidad y el dispositivo asociado.</Text>
 
-      {account ? (
+      {busy === 'restore' ? (
+        <View style={styles.loginPanel}>
+          <ActivityIndicator color="#1f6feb" />
+          <Text style={styles.loginBody}>Recuperando tu sesión…</Text>
+        </View>
+      ) : restoreError ? (
+        <View style={styles.loginPanel}>
+          <Text style={styles.loginTitle}>No pudimos recuperar tu sesión</Text>
+          <Text style={styles.loginBody}>Comprueba tu conexión e intenta nuevamente.</Text>
+          <Pressable style={styles.googleButton} onPress={restoreSession} accessibilityRole="button">
+            <Text style={styles.googleButtonText}>Reintentar</Text>
+          </Pressable>
+          <Pressable onPress={signIn} style={styles.logoutButton} accessibilityRole="button">
+            <Text style={styles.logoutText}>Continuar con Google</Text>
+          </Pressable>
+        </View>
+      ) : account ? (
         <View style={styles.profileCard}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{account.name.charAt(0)}</Text>
@@ -78,8 +51,10 @@ export function AccountScreen() {
               <Text style={styles.connectedText}>Google conectado</Text>
             </View>
           </View>
-          <Pressable onPress={() => setAccount(null)} accessibilityLabel="Cerrar sesión">
+          <Pressable onPress={signOut} disabled={busy !== null} style={styles.logoutButton}
+            accessibilityRole="button" accessibilityLabel="Cerrar sesión" accessibilityState={{ disabled: busy !== null }}>
             <Ionicons name="log-out-outline" size={22} color="#64748b" />
+            <Text style={styles.logoutText}>{busy === 'signOut' ? 'Cerrando…' : 'Cerrar sesión'}</Text>
           </Pressable>
         </View>
       ) : (
@@ -88,12 +63,13 @@ export function AccountScreen() {
           <Text style={styles.loginTitle}>Inicia sesión para continuar</Text>
           <Text style={styles.loginBody}>Tu cuenta permitirá asociar pasabordos y un único dispositivo autorizado.</Text>
           <Pressable
-            style={[styles.googleButton, !isConfigured && styles.googleButtonDisabled]}
+            style={[styles.googleButton, (!isConfigured || busy !== null) && styles.googleButtonDisabled]}
             onPress={signIn}
-            disabled={!isConfigured}
+            disabled={!isConfigured || busy !== null}
+            accessibilityRole="button"
           >
             <Ionicons name="logo-google" size={19} color="#fff" />
-            <Text style={styles.googleButtonText}>Continuar con Google</Text>
+            <Text style={styles.googleButtonText}>{busy === 'signIn' ? 'Conectando…' : 'Continuar con Google'}</Text>
           </Pressable>
           <Text style={styles.configHint}>
             {isConfigured ? 'Selector nativo de Google preparado.' : 'Modo preparación: falta el Web Client ID.'}
@@ -136,6 +112,8 @@ const styles = StyleSheet.create({
   googleButtonDisabled: { opacity: 0.55 },
   googleButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
   configHint: { color: '#94a3b8', fontSize: 11, textAlign: 'center', marginTop: 12 },
+  logoutButton: { minHeight: 48, padding: 8, alignItems: 'center', justifyContent: 'center' },
+  logoutText: { color: '#64748b', fontSize: 12, marginTop: 4 },
   profileCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#e2e8f0', padding: 15 },
   avatar: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#dbeafe', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#1f6feb', fontSize: 22, fontWeight: '800' },

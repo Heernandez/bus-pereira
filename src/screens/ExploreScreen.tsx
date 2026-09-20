@@ -1,5 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useViewTiming } from '../hooks/useViewTiming';
+import { startupLog, startupOnce } from '../services/startupTiming';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  BackHandler,
   FlatList,
   Modal,
   Pressable,
@@ -7,178 +11,171 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useIsFocused } from '@react-navigation/native';
+import { useExploreReady } from '../context/ExploreReady';
+import { useLocationAccess } from '../context/LocationAccess';
+import { LocationGate } from '../components/LocationGate';
+import { DataStatus } from '../components/DataStatus';
+import { useRemoteData } from '../hooks/useRemoteData';
+import { useLiveTransit, useStationArrivals } from '../hooks/useStationArrivals';
+import { getCatalog, getRouteLive, type LiveBus } from '../services/transit';
+import { StationDetail, RouteDetail, connectionLabel } from '../components/map/TransitDetail';
+import { TransitMap } from '../components/map/TransitMap';
+import { MapDetailSheet, sheetHeight } from '../components/map/MapDetailSheet';
+import { initialMapState, mapSelectionReducer } from '../services/mapSelection';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import {
-  defaultRegion,
-  getVariantCoordinates,
-  mockStops,
-  routeOptions,
-  type MockLocation,
-  type RouteOption,
-  type RouteVariant,
-} from '../data/mockData';
-
-type UpcomingRoute = {
-  route: RouteOption;
-  variant: RouteVariant;
-  arrivalMinutes: number;
-};
+import { type MockLocation, type RouteOption, type RouteVariant } from '../data/mockData';
 
 export function ExploreScreen() {
+  useEffect(() => { startupOnce('Explorar: montado'); }, []);
+  const { markNativeReady, markExploreReady } = useExploreReady();
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [mapTimedOut, setMapTimedOut] = useState(false);
+  const [layoutReady, setLayoutReady] = useState(false);
   const insets = useSafeAreaInsets();
+  const tabBarHeight = useBottomTabBarHeight();
+  const [locating, setLocating] = useState(false);
+  const locatingRef = useRef(false);
+  const userCamera = useRef(false);
+  const screenActive = useRef(false);
+  const { height } = useWindowDimensions();
+  const centered = useRef(false);
+  const focused = useIsFocused();
+  const onViewLayout = useViewTiming('Explorar', focused);
+  const location = useLocationAccess();
+  const catalog = useRemoteData(getCatalog);
   const [searchVisible, setSearchVisible] = useState(false);
-  const [stationModalVisible, setStationModalVisible] = useState(false);
+  const [mapState, dispatch] = useReducer(mapSelectionReducer, initialMapState);
+  const { selection } = mapState;
+  const mapRef = useRef<MapView>(null);
+  const [mapReady, setMapReady] = useState(false);
   const [searchText, setSearchText] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState<MockLocation>(mockStops[0]);
-  const [selectedRouteVariantId, setSelectedRouteVariantId] = useState<string | null>(null);
-  const [userLocation, setUserLocation] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
+  const selectedLocation = selection.type === 'station' ? catalog.data?.stations.find(stop => stop.id === selection.stationId) : undefined;
+  const canInteract = location.state === 'ready' && focused;
+  screenActive.current = canInteract;
+  useEffect(() => () => { screenActive.current = false; }, []);
+  const routeId = selection.type === 'route' || selection.type === 'bus' ? selection.routeId : undefined;
+  const routeLive = useLiveTransit(routeId, !!routeId && canInteract, 'route', getRouteLive);
+  const route = routeLive.data?.data.route;
+  const variant = route?.variants.find(variant => (selection.type === 'route' || selection.type === 'bus') && variant.id === selection.variantId) ?? route?.variants[0];
+
+  const arrivals = useStationArrivals(selectedLocation?.id, selection.type === 'station' && canInteract);
+  const userLocation = location.coordinate;
 
   useEffect(() => {
-    let isMounted = true;
+    if (focused) void location.refresh();
+  }, [focused, location.refresh]);
+  useEffect(() => {
+    if (canInteract) void location.locate();
+  }, [canInteract, location.locate]);
+  useEffect(() => {
+    if (!canInteract) { setSearchVisible(false); setLocating(false); }
+  }, [canInteract]);
 
-    const requestLocation = async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-
-      if (status !== 'granted') {
-        return;
-      }
-
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      if (isMounted) {
-        setUserLocation({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-        });
-      }
-    };
-
-    requestLocation();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const visibleRegion = useMemo(() => {
-    if (userLocation) {
-      return {
-        ...defaultRegion,
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
-      };
-    }
-
-    return {
-      ...defaultRegion,
-      latitude: selectedLocation.latitude,
-      longitude: selectedLocation.longitude,
-    };
-  }, [selectedLocation, userLocation]);
+  useEffect(() => {
+    if (!focused || selection.type === 'none') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (mapState.sheet === 'expanded') dispatch({ type: 'sheet', value: 'collapsed' });
+      else dispatch({ type: 'back' });
+      return true;
+    });
+    return () => subscription.remove();
+  }, [focused, selection.type, mapState.sheet]);
 
   const filteredStops = useMemo(() => {
     const query = searchText.trim().toLowerCase();
-
-    if (!query) {
-      return mockStops;
+    return (catalog.data?.stations ?? []).filter(item =>
+      item.name.toLowerCase().includes(query) || item.subtitle.toLowerCase().includes(query));
+  }, [searchText, catalog.data]);
+  const selectedRouteCoordinates = useMemo(() => routeLive.data?.data.shapes.find(shape => shape.variantId === variant?.id)?.coordinates ?? [], [routeLive.data, variant?.id]);
+  const routeStops = useMemo(() => (variant?.stopSequence ?? []).flatMap(id => {
+    const stop = routeLive.data?.data.stops.find(stop => stop.id === id);
+    return stop ? [stop] : [];
+  }), [variant, routeLive.data]);
+  useEffect(() => { userCamera.current = false; }, [selection]);
+  const shapeKey = useMemo(() => JSON.stringify(selectedRouteCoordinates), [selectedRouteCoordinates]);
+  useEffect(() => {
+    if (!userCamera.current && mapReady && canInteract && selectedLocation) mapRef.current?.animateCamera({ center: selectedLocation }, { duration: 450 });
+  }, [mapReady, canInteract, selectedLocation]);
+  useEffect(() => {
+    if (!userCamera.current && mapReady && canInteract && selectedRouteCoordinates.length > 1) {
+      mapRef.current?.fitToCoordinates(selectedRouteCoordinates, { edgePadding: { top: insets.top + 90, left: 48, right: 48, bottom: insets.bottom + 100 + sheetHeight(height, mapState.sheet === 'expanded') }, animated: true });
     }
-
-    return mockStops.filter((item) =>
-      item.name.toLowerCase().includes(query) || item.subtitle.toLowerCase().includes(query)
-    );
-  }, [searchText]);
-
-  const upcomingRoutes = useMemo<UpcomingRoute[]>(
-    () =>
-      routeOptions.flatMap((route, routeIndex) =>
-        route.variants
-          .filter((variant) => variant.stopSequence.includes(selectedLocation.id))
-          .map((variant, variantIndex) => ({
-            route,
-            variant,
-            arrivalMinutes: 3 + routeIndex * 4 + variantIndex * 2,
-          })),
-      ),
-    [selectedLocation.id],
-  );
-
-  const selectedRoute = useMemo(
-    () => upcomingRoutes.find((item) => item.variant.id === selectedRouteVariantId),
-    [selectedRouteVariantId, upcomingRoutes],
-  );
-
-  const selectedRouteCoordinates = useMemo(() => {
-    if (!selectedRoute) {
-      return [];
+  }, [mapReady, canInteract, shapeKey, height, insets.top, insets.bottom, mapState.sheet]);
+  useEffect(() => {
+    if (mapReady && canInteract && userLocation && selection.type === 'none' && !centered.current) {
+      centered.current = true; mapRef.current?.animateCamera({ center: userLocation }, { duration: 450 });
     }
+  }, [mapReady, canInteract, userLocation, selection.type]);
+  const selectRoute = useCallback((route: RouteOption, variant: RouteVariant, tripId?: string) => dispatch({ type: 'select', selection: { type: 'route', routeId: route.id, variantId: variant.id, tripId } }), []);
+  const selectBus = useCallback((bus: LiveBus) => dispatch({ type: 'select', selection: { type: 'bus', busId: bus.id, routeId: bus.routeId, variantId: bus.variantId, tripId: bus.tripId } }), []);
 
-    if (selectedRoute.variant.geometry.coordinates.length > 0) {
-      return selectedRoute.variant.geometry.coordinates;
+  const centerOnMe = useCallback(async () => {
+    if (!mapReady || !canInteract || locatingRef.current) return;
+    locatingRef.current = true;
+    userCamera.current = true;
+    setLocating(true);
+    // Apply a complete camera, avoiding the inherited route zoom/tilt.
+    const focus = (point: { latitude: number; longitude: number }) => {
+      if (!screenActive.current) return;
+      centered.current = true;
+      mapRef.current?.setCamera({ center: point, zoom: 16, pitch: 0, heading: 0 });
+    };
+    if (userLocation) focus(userLocation);
+    try {
+      const point = await location.locate();
+      if (point) focus(point);
+    } finally {
+      locatingRef.current = false;
+      if (screenActive.current) setLocating(false);
     }
-
-    return getVariantCoordinates(selectedRoute.variant);
-  }, [selectedRoute]);
-
-  const openStationRoutes = (stop: MockLocation) => {
-    setSelectedLocation(stop);
-    setSelectedRouteVariantId(null);
+  }, [mapReady, canInteract, userLocation, location.locate]);
+  useEffect(() => {
+    const fallback = mapTimedOut || !!catalog.error || (location.state !== 'checking' && location.state !== 'ready');
+    if (layoutReady && (mapReady || fallback)) {
+      startupOnce('Explorar: listo para liberar splash nativo', { mapReady, fallback });
+      markNativeReady();
+    }
+  }, [layoutReady, mapReady, mapTimedOut, catalog.error, location.state, markNativeReady]);
+  useEffect(() => {
+    if (layoutReady && (mapLoaded || mapTimedOut || catalog.error || (location.state !== 'checking' && location.state !== 'ready'))) { startupOnce('Explorar: listo para retirar cubierta React', { mapLoaded, mapTimedOut, catalogError: !!catalog.error, location: location.state }); markExploreReady(); }
+  }, [layoutReady, mapLoaded, mapTimedOut, catalog.error, location.state, markExploreReady]);
+  useEffect(() => {
+    if (!catalog.data || mapLoaded) return;
+    startupOnce('Mapa: catálogo disponible, esperando carga');
+    const timeout = setTimeout(() => { startupLog('Mapa: timeout de carga', { limitMs: 12000 }); setMapTimedOut(true); }, 12000);
+    return () => clearTimeout(timeout);
+  }, [catalog.data, mapLoaded]);
+  const onMapLoaded = useCallback(() => { startupOnce('Mapa: onMapLoaded'); setMapLoaded(true); setMapTimedOut(false); }, []);
+  const onExploreLayout = useCallback(() => { onViewLayout(); startupOnce('Explorar: primer layout'); setLayoutReady(true); }, [onViewLayout]);
+  const onMapReady = useCallback(() => { startupOnce('Mapa: onMapReady'); setMapReady(true); }, []);
+  const openStationRoutes = useCallback((stop: MockLocation) => {
+    if (!canInteract) return;
+    dispatch({ type: 'select', selection: { type: 'station', stationId: stop.id } });
     setSearchVisible(false);
     setSearchText('');
-    setStationModalVisible(true);
-  };
+  }, [canInteract]);
+  if (!catalog.data) return <LocationGate><View onLayout={onExploreLayout} style={[styles.container, { justifyContent: 'center' }]}><DataStatus error={catalog.error} retry={catalog.reload} /></View></LocationGate>;
+  const defaultRegion = catalog.data.city.defaultRegion;
+
 
   return (
-    <View style={styles.container}>
-      <MapView
-        provider={PROVIDER_GOOGLE}
-        style={StyleSheet.absoluteFill}
-        initialRegion={defaultRegion}
-        region={visibleRegion}
-        showsTraffic
-        showsCompass
-        showsUserLocation={Boolean(userLocation)}
-      >
-        {mockStops.map((stop) => (
-          <Marker
-            key={stop.id}
-            coordinate={{ latitude: stop.latitude, longitude: stop.longitude }}
-            title={stop.name}
-            description={stop.subtitle}
-            pinColor={stop.id === selectedLocation.id ? '#1f6feb' : '#f59e0b'}
-            onPress={() => openStationRoutes(stop)}
-          />
-        ))}
+    <LocationGate><View style={styles.container} onLayout={onExploreLayout}>
+      <TransitMap mapRef={mapRef} initialRegion={defaultRegion} canInteract={canInteract} onReady={onMapReady} onLoaded={onMapLoaded}
+        stations={routeId ? routeStops : catalog.data.stations} routeStop={!!routeId} selectedStationId={selectedLocation?.id}
+        shape={selectedRouteCoordinates} color={route?.color ?? '#1f6feb'} store={routeId ? routeLive.store : arrivals.store}
+        selectedBusId={selection.type === 'bus' ? selection.busId : undefined} onSelectBus={selectBus}
+        onSelectStation={openStationRoutes} userLocation={userLocation} />
 
-        {selectedRoute && selectedRouteCoordinates.length > 1 && (
-          <Polyline
-            coordinates={selectedRouteCoordinates}
-            strokeColor={selectedRoute.route.color}
-            strokeWidth={5}
-          />
-        )}
-
-        {userLocation && (
-          <Marker
-            coordinate={{
-              latitude: userLocation.latitude,
-              longitude: userLocation.longitude,
-            }}
-            title="Tu ubicación"
-            pinColor="#22c55e"
-          />
-        )}
-      </MapView>
-
+      {mapTimedOut && !mapLoaded && <View style={[StyleSheet.absoluteFill, { backgroundColor: '#f8fafc', justifyContent: 'center', padding: 24 }]}>
+        <Text style={{ textAlign: 'center', color: '#475569' }}>No pudimos cargar el mapa. Comprueba tu conexión a internet.</Text>
+      </View>}
       <Pressable
         style={[styles.searchButton, { top: 52 + insets.top }]}
         onPress={() => setSearchVisible(true)}
@@ -188,25 +185,19 @@ export function ExploreScreen() {
       </Pressable>
 
       <Pressable
-        style={[styles.locationButton, { top: 52 + insets.top }]}
-        onPress={() => {
-          if (userLocation) {
-            setSelectedLocation({
-              id: 'user-location',
-              name: 'Tu ubicación',
-              subtitle: 'Ubicación actual',
-              latitude: userLocation.latitude,
-              longitude: userLocation.longitude,
-              type: 'Punto de interés',
-            });
-          }
-        }}
+        style={[styles.locationButton, { bottom: tabBarHeight + 12 + (selection.type === 'none' ? 0 : sheetHeight(height, mapState.sheet === 'expanded')) }]}
+        onPress={centerOnMe}
+        disabled={!mapReady || !canInteract || locating}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !mapReady || !canInteract || locating, busy: locating }}
         accessibilityLabel="Centrar en mi ubicación"
       >
-        <Ionicons name="locate" size={20} color="#fff" />
+        {locating ? <ActivityIndicator color="#fff" /> : <Ionicons name="locate" size={24} color="#fff" />}
       </Pressable>
 
-      <Modal transparent animationType="slide" visible={searchVisible}>
+      {location.positionError && <Pressable style={{ position: 'absolute', top: 116 + insets.top, left: 16, right: 16, backgroundColor: '#fff', padding: 16, borderRadius: 12 }} onPress={centerOnMe}><Text>{location.positionError}</Text><Text style={{ color: '#1f6feb', marginTop: 8 }}>Reintentar ubicación</Text></Pressable>}
+
+      <Modal transparent animationType="slide" visible={searchVisible && canInteract} onRequestClose={() => setSearchVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setSearchVisible(false)} />
 
         <View style={styles.modalContainer}>
@@ -252,78 +243,20 @@ export function ExploreScreen() {
         </View>
       </Modal>
 
-      <Modal transparent animationType="slide" visible={stationModalVisible}>
-        <View style={styles.stationModalBackdrop}>
-          <View style={[styles.stationModalContainer, { paddingBottom: 24 + insets.bottom }]}>
-            <View style={styles.stationModalHandle} />
-            <View style={styles.stationModalHeader}>
-              <View style={styles.stationModalTitleWrap}>
-                <Text style={styles.stationModalEyebrow}>PRÓXIMOS BUSES</Text>
-                <Text style={styles.stationModalTitle}>{selectedLocation.name}</Text>
-                <Text style={styles.stationModalSubtitle}>{selectedLocation.subtitle}</Text>
-              </View>
-              <Pressable
-                onPress={() => setStationModalVisible(false)}
-                accessibilityLabel="Cerrar rutas de la estación"
-              >
-                <Ionicons name="close" size={26} color="#111827" />
-              </Pressable>
-            </View>
-
-            <Text style={styles.stationModalDescription}>
-              Buses estimados según el GPS simulado de la red.
-            </Text>
-
-            <FlatList
-              data={upcomingRoutes}
-              keyExtractor={(item) => item.variant.id}
-              contentContainerStyle={styles.upcomingList}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={styles.upcomingRoute}
-                  onPress={() => {
-                    setSelectedRouteVariantId(item.variant.id);
-                    setStationModalVisible(false);
-                  }}
-                >
-                  <View style={[styles.routeColorBar, { backgroundColor: item.route.color }]} />
-                  <View style={styles.upcomingRouteMain}>
-                    <View style={styles.upcomingRouteTop}>
-                      <View style={styles.busNumberBadge}>
-                        <Text style={styles.busNumber}>{item.route.code}</Text>
-                      </View>
-                      <View style={styles.upcomingRouteNameWrap}>
-                        <Text style={styles.upcomingRouteName}>{item.route.name}</Text>
-                        <Text style={styles.upcomingRouteDirection}>
-                          Hacia {item.variant.destinationName}
-                        </Text>
-                      </View>
-                      <View style={styles.arrivalWrap}>
-                        <Text style={styles.arrivalTime}>{item.arrivalMinutes} min</Text>
-                        <Text style={styles.arrivalLabel}>estimado</Text>
-                      </View>
-                    </View>
-                    <View style={styles.gpsStatus}>
-                      <Ionicons name="radio" size={14} color="#0f766e" />
-                      <Text style={styles.gpsStatusText}>GPS activo · selecciona para ver la ruta</Text>
-                    </View>
-                  </View>
-                </Pressable>
-              )}
-              ListEmptyComponent={
-                <View style={styles.noRoutesState}>
-                  <Ionicons name="bus-outline" size={34} color="#94a3b8" />
-                  <Text style={styles.noRoutesTitle}>No hay rutas registradas</Text>
-                  <Text style={styles.noRoutesText}>
-                    Todavía no tenemos buses asociados a esta estación.
-                  </Text>
-                </View>
-              }
-            />
-          </View>
-        </View>
-      </Modal>
-    </View>
+      {selection.type === 'station' && canInteract && <MapDetailSheet
+        title={selectedLocation?.name ?? 'Estación'} subtitle={`${selectedLocation?.subtitle ?? ''} · ${connectionLabel(arrivals.connection)}`}
+        expanded={mapState.sheet === 'expanded'} onExpand={expanded => dispatch({ type: 'sheet', value: expanded ? 'expanded' : 'collapsed' })}
+        onBack={() => dispatch({ type: 'back' })} onClear={() => dispatch({ type: 'clear' })}>
+        <StationDetail response={arrivals.data} store={arrivals.store} connection={arrivals.connection} error={arrivals.error} retry={arrivals.retry} onSelect={selectRoute} />
+      </MapDetailSheet>}
+      {routeId && canInteract && <MapDetailSheet title={route ? `${route.code} · ${route.name}` : 'Ruta'}
+        subtitle={variant ? `Hacia ${variant.destinationName}` : 'Cargando recorrido'} expanded={mapState.sheet === 'expanded'}
+        onExpand={expanded => dispatch({ type: 'sheet', value: expanded ? 'expanded' : 'collapsed' })}
+        onBack={() => dispatch({ type: 'back' })} onClear={() => dispatch({ type: 'clear' })}>
+        <RouteDetail response={routeLive.data} variantId={variant?.id} selectedBusId={selection.type === 'bus' ? selection.busId : undefined}
+          store={routeLive.store} connection={routeLive.connection} error={routeLive.error} retry={routeLive.retry} onSelect={selectRoute} />
+      </MapDetailSheet>}
+    </View></LocationGate>
   );
 }
 
@@ -351,8 +284,7 @@ const styles = StyleSheet.create({
   },
   locationButton: {
     position: 'absolute',
-    top: 52,
-    right: 86,
+    right: 18,
     width: 46,
     height: 46,
     borderRadius: 23,
@@ -444,154 +376,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#64748b',
     paddingVertical: 20,
-  },
-  stationModalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(15, 23, 42, 0.35)',
-  },
-  stationModalContainer: {
-    minHeight: '86%',
-    backgroundColor: '#f8fafc',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingTop: 10,
-    paddingHorizontal: 18,
-  },
-  stationModalHandle: {
-    alignSelf: 'center',
-    width: 42,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#cbd5e1',
-    marginBottom: 22,
-  },
-  stationModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-  },
-  stationModalTitleWrap: {
-    flex: 1,
-    paddingRight: 16,
-  },
-  stationModalEyebrow: {
-    color: '#1f6feb',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  stationModalTitle: {
-    color: '#111827',
-    fontSize: 25,
-    fontWeight: '800',
-    marginTop: 4,
-  },
-  stationModalSubtitle: {
-    color: '#64748b',
-    fontSize: 14,
-    marginTop: 4,
-  },
-  stationModalDescription: {
-    color: '#475569',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 22,
-    marginBottom: 14,
-  },
-  upcomingList: {
-    paddingBottom: 16,
-  },
-  upcomingRoute: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    overflow: 'hidden',
-  },
-  routeColorBar: {
-    width: 6,
-  },
-  upcomingRouteMain: {
-    flex: 1,
-    padding: 14,
-  },
-  upcomingRouteTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  busNumberBadge: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: '#dbeafe',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  busNumber: {
-    color: '#1f6feb',
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  upcomingRouteNameWrap: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  upcomingRouteName: {
-    color: '#111827',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  upcomingRouteDirection: {
-    color: '#64748b',
-    fontSize: 12,
-    marginTop: 3,
-  },
-  arrivalWrap: {
-    alignItems: 'flex-end',
-    marginLeft: 8,
-  },
-  arrivalTime: {
-    color: '#0f766e',
-    fontSize: 16,
-    fontWeight: '800',
-  },
-  arrivalLabel: {
-    color: '#64748b',
-    fontSize: 10,
-    marginTop: 2,
-  },
-  gpsStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#f1f5f9',
-  },
-  gpsStatusText: {
-    color: '#0f766e',
-    fontSize: 11,
-    marginLeft: 6,
-  },
-  noRoutesState: {
-    alignItems: 'center',
-    paddingTop: 60,
-    paddingHorizontal: 24,
-  },
-  noRoutesTitle: {
-    color: '#334155',
-    fontSize: 17,
-    fontWeight: '700',
-    marginTop: 12,
-  },
-  noRoutesText: {
-    color: '#64748b',
-    textAlign: 'center',
-    fontSize: 13,
-    lineHeight: 20,
-    marginTop: 6,
   },
 });

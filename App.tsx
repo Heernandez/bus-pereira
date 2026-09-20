@@ -1,9 +1,20 @@
 import React from 'react';
+import { useViewTiming } from './src/hooks/useViewTiming';
+import { startupLog } from './src/services/startupTiming';
+import * as SplashScreen from 'expo-splash-screen';
+
+startupLog('Splash: solicitando retención');
+void SplashScreen.preventAutoHideAsync().then(() => startupLog('Splash: retención confirmada')).catch(() => startupLog('Splash: error de retención'));
+import { SessionProvider } from './src/context/Session';
+import { OpeningProvider } from './src/context/Opening';
+import { OpeningCampaign } from './src/components/OpeningCampaign';
 import { StyleSheet, Text, View } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, useIsFocused } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { LocationAccessProvider } from './src/context/LocationAccess';
 
 import { ExploreScreen } from './src/screens/ExploreScreen';
 import { TripScreen } from './src/screens/TripScreen';
@@ -29,10 +40,11 @@ function PlaceholderScreen({
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
 }) {
+  const onViewLayout = useViewTiming('Rutas favoritas', useIsFocused());
   const insets = useSafeAreaInsets();
 
   return (
-    <View
+    <View onLayout={onViewLayout}
       style={[
         styles.placeholderContainer,
         { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 96 },
@@ -50,7 +62,11 @@ function PlaceholderScreen({
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AppContent />
+      <SessionProvider>
+        <OpeningProvider renderOpening={(campaign, _loading, dismiss) => <OpeningCampaign key={campaign?.id ?? 'loading'} campaign={campaign} dismiss={dismiss} />}>
+          <LocationAccessProvider><AppContent /></LocationAccessProvider>
+        </OpeningProvider>
+      </SessionProvider>
     </SafeAreaProvider>
   );
 }
@@ -59,7 +75,7 @@ function AppContent() {
   const insets = useSafeAreaInsets();
 
   return (
-    <NavigationContainer>
+    <NavigationContainer onReady={() => startupLog('Navegación: lista')}>
       <Tab.Navigator
         initialRouteName="Explorar"
         screenOptions={({ route }) => ({

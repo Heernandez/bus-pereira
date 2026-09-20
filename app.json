@@ -23,16 +23,27 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Esta app necesita acceder a tu ubicación para mostrarte paradas cercanas y ubicarte en el mapa.",
-          "locationWhenInUsePermission": "Esta app necesita acceder a tu ubicación para mostrarte paradas cercanas y ubicarte en el mapa."
+          "locationAlwaysAndWhenInUsePermission": "Esta app necesita acceder a tu ubicaci\u00f3n para mostrarte paradas cercanas y ubicarte en el mapa.",
+          "locationWhenInUsePermission": "Esta app necesita acceder a tu ubicaci\u00f3n para mostrarte paradas cercanas y ubicarte en el mapa."
         }
       ],
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "./plugins/withAndroidBuildMemory",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#0b6f50",
+          "resizeMode": "contain",
+          "imageWidth": 200
+        }
+      ],
+      "./plugins/withNativeStartupLogs"
     ],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicación para mostrarte tu posición en el mapa y sugerirte paradas cercanas."
+        "NSLocationWhenInUseUsageDescription": "Necesitamos tu ubicaci\u00f3n para mostrarte tu posici\u00f3n en el mapa y sugerirte paradas cercanas."
       }
     },
     "android": {

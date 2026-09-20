@@ -305,3 +305,63 @@ Si aún no reconoce el teléfono, revisa:
 ---
 
 Si quieres, el siguiente paso puede ser dejarte un README más profesional con badges, screenshots, arquitectura y checklist de despliegue.
+
+## Fuente de datos: dummy o API
+
+Para activar los datos dummy, configura `.env` así:
+
+```dotenv
+EXPO_PUBLIC_USE_DUMMY_DATA=true
+EXPO_PUBLIC_API_URL=http://10.0.2.2:3000/api/v1
+```
+
+- `true` (también el valor predeterminado si no existe la variable): rutas, estaciones, llegadas y productos locales. No realiza consultas al backend.
+- `false`: consulta `/city`, `/stops`, `/stations`, `/routes`, `/stations/:id/arrivals` y `/products` en el backend. Los errores aparecen con reintento; no hay fallback silencioso a dummy.
+- `10.0.2.2` sirve para acceder al equipo desde el emulador Android estándar. En un teléfono físico usa la IP LAN del equipo que ejecuta el backend. Para una compilación que restrinja HTTP utiliza un servidor HTTPS. Producción debe usar HTTPS.
+- Reinicia Metro después de cambiar las variables (`npx expo start --clear`). En una app release, las variables se incorporan al bundle: genera una nueva compilación/actualización para cambiarlas.
+
+El backend puede devolver `meta.source: "demo"` incluso con el modo API activado. La pantalla identifica las llegadas simuladas, por horario, GPS o sin estimación. Consulta de llegadas cada 30 segundos (o el intervalo indicado por la API) mientras el modal está visible y la app está activa; cancela peticiones al cambiar de estación o cerrar.
+
+En modo API, Viaje filtra variantes que conectan las paradas en el sentido correcto y muestra el trazado completo de la variante. Todavía no existe planificación con transbordos, cálculo de caminatas por calles o duración real del itinerario. El catálogo de pasabordos sí se consulta; compras e historial remoto están pendientes del backend, por lo que no se generan tickets dummy en modo API. Google Sign-In conserva su integración actual.
+
+## Ubicación en Explorar y Viaje
+
+Ambos mapas quedan bloqueados por un panel mientras falta el permiso o el servicio de ubicación. El permiso solo es de primer plano.
+
+- **Sin solicitar / denegado:** solicita permiso al primer acceso; el panel permite pedirlo nuevamente si el SO lo permite.
+- **Bloqueado permanentemente:** abre Ajustes de la app para conceder permiso. El SO decide cuándo se puede volver a mostrar su diálogo.
+- **Servicio de ubicación apagado:** en Android, “Activar ubicación” llama a `enableNetworkProviderAsync` para mostrar la resolución nativa del sistema. Al aceptar vuelve a comprobar que el servicio esté encendido; si se cancela, mantiene el bloqueo. Incluye acceso alternativo a Ajustes de ubicación si el dispositivo no soporta la resolución con Google Play Services.
+- **iOS:** dirige a Ajustes e indica activar Localización. No existe una API equivalente para encenderla automáticamente desde la app.
+- **Permiso y servicio disponibles, pero sin posición:** muestra un mensaje de señal/posición con reintento tras un máximo de 15 segundos. No se presenta como permiso denegado.
+- Revisa permiso y servicio al volver del segundo plano, al entrar en las vistas y cada 3 segundos mientras la app está activa. Los modales de búsqueda se cierran si se pierde acceso; los gestos, pulsaciones y accesibilidad del mapa quedan bloqueados.
+
+La app no puede forzar la aceptación del diálogo ni encender ubicación sin consentimiento. En Android solicita el diálogo nativo y solo desbloquea tras verificar el servicio. Referencia: [Expo Location SDK 57](https://docs.expo.dev/versions/v57.0.0/sdk/location/#locationenablenetworkproviderasync).
+
+## Verificar estos flujos
+
+```bash
+npm run typecheck
+npm test
+npx expo export --platform android --output-dir /tmp/bus-pereira-export
+```
+
+En dispositivo/emulador, verificar:
+
+1. Primera apertura: aceptar y denegar el permiso; ambos mapas deben respetar la decisión.
+2. Denegar permanentemente: “Abrir ajustes”, conceder y volver; comprobar desbloqueo.
+3. Con permiso concedido, apagar la ubicación: ambos mapas deben bloquearse. Cancelar y luego aceptar “Activar ubicación”; verificar el diálogo nativo y el estado final.
+4. Apagar ubicación desde ajustes rápidos con un modal abierto: debe cerrarse y aparecer el panel.
+5. Mantener servicio encendido sin señal GPS: comprobar mensaje distinto de permiso denegado y reintento.
+6. `EXPO_PUBLIC_USE_DUMMY_DATA=false`: arrancar backend, consultar estaciones y tocar una; apagar backend y verificar error/reintento. Cambiar rápido de estación no debe mostrar la respuesta de la anterior.
+
+## Explorar: estaciones, rutas y buses en vivo
+
+La pantalla existente ahora tiene selección exclusiva de estación/ruta/bus y un panel inferior expandible y colapsable. Minimizar conserva la selección y sus actualizaciones. Las rutas muestran su geometría, sentidos y estaciones; los buses tienen markers animados.
+
+Consulta [docs/live-map.md](docs/live-map.md) para las etapas implementadas, archivos, contrato REST/WebSocket y pruebas. `EXPO_PUBLIC_WS_URL` es opcional: por defecto se deriva de `EXPO_PUBLIC_API_URL` con el protocolo ws/wss y `/live`. La variable `EXPO_PUBLIC_USE_DUMMY_DATA` selecciona el modo; cuando es `true`, el movimiento se identifica como simulación.
+
+Esta integración reemplaza el comportamiento anterior de consultar llegadas solo mientras el modal estaba abierto: ahora se actualizan mientras la estación siga seleccionada, incluso con el panel colapsado.
+
+La recuperación de Google ahora ocurre al iniciar la app. La publicidad de apertura consume `/campaigns/active` sin autenticación y con una consulta por apertura. El endpoint de pasabordos autenticados sigue pendiente en el backend. Contratos y pruebas manuales: [docs/app-opening.md](docs/app-opening.md).
+
+Campañas múltiples con límite por dispositivo: [contrato y JSON para backend](docs/campaigns.md). Requiere recompilar la app nativa para incorporar AsyncStorage.
