@@ -49,6 +49,12 @@ Sin campañas: `{"data":[],"meta":{"source":"live"}}`. Se admite `data:null` de 
 
 Al subir el límite de 3 a 5, un dispositivo con 3 visualizaciones puede verla 2 veces más. Bajar el límite no borra el historial. El UUID distingue campañas: cambiar nombre, imagen o fecha no reinicia el contador.
 
+### Diagnóstico en debug y release
+
+Instalar con `adb install -r` conserva el historial: las visualizaciones realizadas en debug también cuentan al instalar release sobre la misma aplicación. Si pasa directamente al mapa, revisa el registro `[Campañas] Elegibilidad`: `views`, `maxViewsPerDevice` y `eligible` indican si se agotó el límite. Para permitir más exposiciones de la misma campaña, aumenta `maxViewsPerDevice` en el backend y vuelve a abrir completamente la app; no hace falta republicarla ni recompilar.
+
+Los registros `[Campañas]` están disponibles también con los tiempos de apertura desactivados. Distinguen una campaña descartada por límite, un error al preparar la publicidad, un fallo o timeout de imagen y una imagen cargada correctamente.
+
 Persistencia local con AsyncStorage, clave `bus-pereira:campaign-views:v1`. Es por instalación, compartida entre cuentas; logout no borra el historial. Borrar datos/reinstalar puede reiniciarlo; no identifica físicamente un dispositivo ni garantiza límites entre instalaciones/restauraciones. No se almacenan imágenes ni tokens. Si falla la persistencia se omite la publicidad para no repetir sin control. Modo dummy no consulta ni limpia el historial real.
 
 ## Cambio necesario en métricas del backend

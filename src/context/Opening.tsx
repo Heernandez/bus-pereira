@@ -72,7 +72,8 @@ export function OpeningProvider({ children, renderOpening }: { children: React.R
     }
     void prepared.current.then(campaigns => {
       if (active) setOpening({ done: true, campaigns });
-    }).catch(() => {
+    }).catch(error => {
+      console.warn('[Campañas] No se pudo preparar la publicidad', error instanceof Error ? error.message : String(error));
       if (active) setOpening({ done: true, campaigns: [] });
     });
     // Keep the single request through React effect cleanup/replay; request has its own timeout.

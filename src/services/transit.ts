@@ -1,6 +1,6 @@
 import { startupSpan } from './startupTiming';
 import { backendArrival, backendBus } from './liveProtocol';
-import { getVariantCoordinates, defaultRegion, mockStops, routeOptions, type MockLocation, type RouteOption, type RouteVariant } from '../data/mockData';
+import { getVariantCoordinates, defaultRegion, dummyStops, routeOptions, type Location, type RouteOption, type RouteVariant } from '../data/catalog';
 
 // Expo replaces these literal references when bundling.
 export const USE_DUMMY_DATA = process.env.EXPO_PUBLIC_USE_DUMMY_DATA !== 'false';
@@ -14,7 +14,7 @@ export type LiveBus = {
 export type Incident = { id: string; title: string; description?: string };
 export type Catalog = {
   city: { id: string; name: string; country: string; defaultRegion: typeof defaultRegion };
-  stops: MockLocation[]; stations: MockLocation[]; routes: RouteOption[];
+  stops: Location[]; stations: Location[]; routes: RouteOption[];
 };
 export type Arrival = {
   id: string; route: RouteOption; variant: RouteVariant;
@@ -23,7 +23,7 @@ export type Arrival = {
   predictionSource: 'demo' | 'gps' | 'schedule' | 'unavailable'; lastPositionAt: string | null;
 };
 export type ArrivalsResponse = {
-  data: { station: MockLocation; servingRoutes: { route: RouteOption; variant: RouteVariant }[]; arrivals: Arrival[]; buses?: LiveBus[]; incidents?: Incident[] };
+  data: { station: Location; servingRoutes: { route: RouteOption; variant: RouteVariant }[]; arrivals: Arrival[]; buses?: LiveBus[]; incidents?: Incident[] };
   meta: { source: 'demo' | 'live'; generatedAt: string; refreshAfterSeconds: number };
 };
 export type Product = { id: 'round_trip' | '7_days' | '28_days'; name: string; price: number; currency: 'COP'; uses: number | null; validityDays: number | null };
@@ -68,11 +68,11 @@ export async function request<T>(path: string, signal?: AbortSignal, headers?: R
 export async function getCatalog(signal?: AbortSignal): Promise<Catalog> {
   if (USE_DUMMY_DATA) return {
     city: { id: 'pereira', name: 'Pereira', country: 'CO', defaultRegion },
-    stops: mockStops, stations: mockStops.filter(stop => stop.type !== 'poi'), routes: routeOptions,
+    stops: dummyStops, stations: dummyStops.filter(stop => stop.type !== 'poi'), routes: routeOptions,
   };
   const [city, stops, stations, routes] = await Promise.all([
-    request<{ data: Catalog['city'] }>('/city', signal), request<{ data: MockLocation[] }>('/stops', signal),
-    request<{ data: MockLocation[] }>('/stations', signal), request<{ data: RouteOption[] }>('/routes', signal),
+    request<{ data: Catalog['city'] }>('/city', signal), request<{ data: Location[] }>('/stops', signal),
+    request<{ data: Location[] }>('/stations', signal), request<{ data: RouteOption[] }>('/routes', signal),
   ]);
   return { city: city.data, stops: stops.data, stations: stations.data, routes: routes.data };
 }
@@ -85,7 +85,7 @@ export async function getArrivals(id: string, signal?: AbortSignal): Promise<Arr
     return { ...response, data: { ...response.data, buses,
       arrivals: response.data.arrivals.map(item => backendArrival(item, item.route, item.variant) ?? item) } };
   }
-  const station = mockStops.find(stop => stop.id === id && stop.type !== 'poi');
+  const station = dummyStops.find(stop => stop.id === id && stop.type !== 'poi');
   if (!station) throw new Error('Estación no encontrada');
   const now = Date.now();
   const servingRoutes = routeOptions.flatMap(route => route.variants.filter(variant => variant.stopSequence.includes(id)).map(variant => ({ route, variant })));
@@ -107,7 +107,7 @@ export async function getProducts(signal?: AbortSignal): Promise<Product[]> {
   ];
 }
 
-export function createDemoBuses(items: { route: RouteOption; variant: RouteVariant }[], station?: MockLocation): LiveBus[] {
+export function createDemoBuses(items: { route: RouteOption; variant: RouteVariant }[], station?: Location): LiveBus[] {
   const now = Date.now();
   return items.flatMap(({ route, variant }, index) => {
     const points = getVariantCoordinates(variant);
@@ -135,7 +135,7 @@ export function createDemoBuses(items: { route: RouteOption; variant: RouteVaria
 
 export type RouteLiveResponse = {
   data: {
-    route: RouteOption; stops: MockLocation[];
+    route: RouteOption; stops: Location[];
     shapes: { variantId: string; coordinates: { latitude: number; longitude: number }[] }[];
     buses?: LiveBus[]; incidents?: Incident[];
     nextDepartures?: { id: string; variantId: string; departureAt: string; destinationName: string }[];
@@ -144,15 +144,15 @@ export type RouteLiveResponse = {
 };
 export async function getRouteLive(id: string, signal?: AbortSignal): Promise<RouteLiveResponse> {
   let route: RouteOption;
-  let stops: MockLocation[];
+  let stops: Location[];
   if (USE_DUMMY_DATA) {
     const found = routeOptions.find(route => route.id === id);
     if (!found) throw new Error('Ruta no encontrada');
-    route = found; stops = mockStops;
+    route = found; stops = dummyStops;
   } else {
     try {
       const response = await request<{ data: RouteLiveResponse['data'] & {
-        variants?: { id: string; shape: RouteVariant['geometry']; stations: MockLocation[] }[];
+        variants?: { id: string; shape: RouteVariant['geometry']; stations: Location[] }[];
         updatedAt?: string;
       }; meta: RouteLiveResponse['meta'] }>(`/routes/${encodeURIComponent(id)}/live`, signal);
       const data = response.data;
@@ -170,7 +170,7 @@ export async function getRouteLive(id: string, signal?: AbortSignal): Promise<Ro
     // Older backend: show its actual route geometry, explicitly without live buses.
     const [routeResponse, stopsResponse] = await Promise.all([
       request<{ data: RouteOption }>(`/routes/${encodeURIComponent(id)}`, signal),
-      request<{ data: MockLocation[] }>('/stops', signal),
+      request<{ data: Location[] }>('/stops', signal),
     ]);
     route = routeResponse.data; stops = stopsResponse.data;
   }

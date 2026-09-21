@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { getArrivals, USE_DUMMY_DATA, type ArrivalsResponse, type LiveBus, type Arrival } from '../services/transit';
-import type { RouteOption, RouteVariant } from '../data/mockData';
+import type { RouteOption, RouteVariant } from '../data/catalog';
 import { backendArrival, backendBus } from '../services/liveProtocol';
 import { LiveBusStore } from '../services/liveBuses';
 import { subscribeLive, type ConnectionState, type LiveEvent } from '../services/liveTransport';

@@ -2,7 +2,7 @@ import React, { memo, useCallback, useEffect, useState, useSyncExternalStore } f
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { Arrival, ArrivalsResponse, RouteLiveResponse, LiveBus } from '../../services/transit';
-import type { RouteOption, RouteVariant } from '../../data/mockData';
+import type { RouteOption, RouteVariant } from '../../data/catalog';
 import { LiveBusStore, isRecentBus } from '../../services/liveBuses';
 import type { ConnectionState } from '../../services/liveTransport';
 import { DataStatus } from '../DataStatus';

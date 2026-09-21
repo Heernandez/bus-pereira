@@ -43,5 +43,5 @@ yarn-error.*
 
 .env
 
-src/data/mockData.json
-src/data/bkp.mockData.json.example
+src/data/dummyData.json
+src/data/bkp.dummyData.json.example

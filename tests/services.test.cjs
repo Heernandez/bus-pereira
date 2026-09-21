@@ -174,28 +174,28 @@ test('WebSocket subscribes once, filters channel, reconnects and unsubscribes on
 });
 
 test('native backend arrivals and route shapes adapt without fabricating coordinates or ETA', async t => {
-  const { routeOptions, mockStops } = require('../src/data/mockData.ts');
+  const { routeOptions, dummyStops } = require('../src/data/catalog.ts');
   const route = structuredClone(routeOptions[0]);
   const variant = route.variants[0];
   const rawBus = { busId: 'native-bus', vehicleId: 'native-bus', routeId: route.id, variantId: variant.id,
-    latitude: 4.81, longitude: -75.7, headingDegrees: 80, measuredAt: new Date().toISOString(), live: true, stale: false, nextStationId: mockStops[1].id };
+    latitude: 4.81, longitude: -75.7, headingDegrees: 80, measuredAt: new Date().toISOString(), live: true, stale: false, nextStationId: dummyStops[1].id };
   const rawArrival = { ...rawBus, id: 'arrival-1', route, variant, vehicle: { id: rawBus.busId, publicLabel: 'BUS 1' },
     lastPositionAt: rawBus.measuredAt, arrivalMinutes: 3, predictionSource: 'shape_speed' };
   const api = service(false);
   t.mock.method(global, 'fetch', async url => new Response(JSON.stringify(url.endsWith('/arrivals')
-    ? { data: { station: mockStops[0], servingRoutes: [{ route, variant }], arrivals: [rawArrival] }, meta: { source: 'live' } }
-    : { data: { route, variants: route.variants.map(v => ({ id: v.id, shape: v.geometry, stations: mockStops })), buses: [rawBus], updatedAt: rawBus.measuredAt }, meta: { source: 'live' } })));
-  const station = await api.getArrivals(mockStops[0].id);
+    ? { data: { station: dummyStops[0], servingRoutes: [{ route, variant }], arrivals: [rawArrival] }, meta: { source: 'live' } }
+    : { data: { route, variants: route.variants.map(v => ({ id: v.id, shape: v.geometry, stations: dummyStops })), buses: [rawBus], updatedAt: rawBus.measuredAt }, meta: { source: 'live' } })));
+  const station = await api.getArrivals(dummyStops[0].id);
   assert.equal(station.data.buses[0].id, 'native-bus');
   assert.equal(station.data.buses[0].coordinate.latitude, 4.81);
   assert.equal(station.data.arrivals[0].predictionSource, 'gps');
   const live = await api.getRouteLive(route.id);
   assert.equal(live.data.buses[0].routeCode, route.code);
-  assert.equal(live.data.buses[0].nextStopId, mockStops[1].id);
+  assert.equal(live.data.buses[0].nextStopId, dummyStops[1].id);
   assert.equal(live.data.buses[0].etaMinutes, null);
   assert.equal(live.meta.liveAvailable, true);
   assert.equal(live.meta.refreshAfterSeconds, 30);
-  assert.equal(live.data.stops.length, mockStops.length);
+  assert.equal(live.data.stops.length, dummyStops.length);
   for (const shape of live.data.shapes) {
     const v = route.variants.find(v => v.id === shape.variantId);
     if (v.geometry.status !== 'ready') assert.deepEqual(shape.coordinates, []);
@@ -204,11 +204,11 @@ test('native backend arrivals and route shapes adapt without fabricating coordin
 
 test('route live fallback is limited to 404, never turns errors into dummy buses', async t => {
   const api = service(false);
-  const { routeOptions, mockStops } = require('../src/data/mockData.ts');
+  const { routeOptions, dummyStops } = require('../src/data/catalog.ts');
   const route = structuredClone(routeOptions[0]);
   route.variants.forEach(v => { v.geometry = { provider: 'manual', status: 'pending', coordinates: [], encodedPolyline: null }; });
   t.mock.method(global, 'fetch', async url => url.endsWith('/live') ? new Response('{}', { status: 404 })
-    : new Response(JSON.stringify({ data: url.endsWith('/stops') ? mockStops : route })));
+    : new Response(JSON.stringify({ data: url.endsWith('/stops') ? dummyStops : route })));
   const live = await api.getRouteLive(route.id);
   assert.equal(live.meta.liveAvailable, false);
   assert.deepEqual(live.data.buses, []);
@@ -225,6 +225,66 @@ test('dummy route preserves variant shapes and explicitly simulated moving buses
   assert.ok(live.data.buses.length > 0);
   assert.ok(live.data.buses.every(bus => bus.source === 'demo' && bus.live === false));
   assert.ok(live.data.shapes.every(shape => catalog.routes[0].variants.some(v => v.id === shape.variantId)));
+});
+
+test('route segment slicing paints only boarding to alighting, never the full terminal-to-terminal shape', () => {
+  const { sliceRouteSegment, getVariantCoordinates, routeOptions, dummyStops } = require('../src/data/catalog.ts');
+  const variant = routeOptions[0].variants[0];
+  const shape = getVariantCoordinates(variant, dummyStops);
+  assert.ok(shape.length > 4, 'fixture should have a real multi-point shape to slice');
+  const stopCoordinates = variant.stopSequence.map(id => dummyStops.find(stop => stop.id === id));
+  const segment = sliceRouteSegment(shape, stopCoordinates, 0, 1);
+  assert.ok(segment.length < shape.length, 'segment between adjacent stops must be shorter than the whole route shape');
+  assert.ok(segment.length >= 2);
+  // Falls back to a direct two-point line instead of ever returning the untrimmed full shape.
+  assert.deepEqual(sliceRouteSegment([], stopCoordinates, 0, 1), [stopCoordinates[0], stopCoordinates[1]]);
+  assert.deepEqual(sliceRouteSegment([stopCoordinates[0]], stopCoordinates, 0, 1), [stopCoordinates[0], stopCoordinates[1]]);
+});
+
+test('slicing snaps stops in order so a nearby decoy point never outranks the real boarding stop', () => {
+  const { sliceRouteSegment } = require('../src/data/catalog.ts');
+  // S0 -- S1 -- S2(board) -- S3(alight), but the shape also has a decoy at index 1 with the
+  // exact same coordinates as S2, placed impossibly early (before the shape even reaches S1).
+  // A naive whole-array nearest search would latch onto that decoy and draw a detour back to it.
+  const stops = [
+    { latitude: 0, longitude: 0 }, // S0
+    { latitude: 1, longitude: 0 }, // S1
+    { latitude: 2, longitude: 0 }, // S2: boarding station
+    { latitude: 4, longitude: 0 }, // S3: alighting station
+  ];
+  const shape = [
+    { latitude: 0, longitude: 0 },   // 0: S0
+    { latitude: 2, longitude: 0 },   // 1: decoy, identical coords to S2
+    { latitude: 1, longitude: 0 },   // 2: S1 (true)
+    { latitude: 1.5, longitude: 0 }, // 3
+    { latitude: 2, longitude: 0 },   // 4: S2 (true)
+    { latitude: 3, longitude: 0 },   // 5
+    { latitude: 4, longitude: 0 },   // 6: S3 (true)
+  ];
+  const segment = sliceRouteSegment(shape, stops, 2, 3);
+  assert.deepEqual(segment, [shape[4], shape[5], shape[6]]);
+});
+
+test('nearest-stop candidates try alternatives so a real route is found even when the raw-nearest stop belongs to a different one', () => {
+  const { getNearestStops, hasDirectRoute, findDirectVariant } = require('../src/data/catalog.ts');
+  // Modeled on real production data: separate boarding/alighting bays a few meters apart
+  // (e.g. stop-bahia-de-ascenso-alimentadores / stop-bahia-de-descenso-alimentadores). Only the
+  // boarding bay is on the route to the destination; the alighting bay is not.
+  const boarding = { id: 'stop-boarding', name: 'Boarding bay', subtitle: '', latitude: 0.0003, longitude: 0.0003, type: 'station' };
+  const alighting = { id: 'stop-alighting', name: 'Alighting bay', subtitle: '', latitude: 0.0001, longitude: 0.0001, type: 'station' };
+  const destination = { id: 'stop-destination', name: 'Destination', subtitle: '', latitude: 1, longitude: 1, type: 'station' };
+  const origin = { latitude: 0, longitude: 0 }; // closer to the alighting bay, the raw-nearest of the two
+  const stops = [alighting, boarding, destination];
+  const candidates = getNearestStops(origin, stops);
+  assert.equal(candidates[0].id, 'stop-alighting', 'fixture sanity check: the wrong stop must be the raw-nearest');
+  const route = {
+    id: 'r1', code: 'R1', name: 'Route 1', description: '', mode: 'bus', color: '#000', duration: '', transfers: '', stops: '',
+    variants: [{ id: 'v1', direction: 'outbound', destinationName: 'Destination', stopSequence: ['stop-boarding', 'stop-destination'],
+      geometry: { provider: 'manual', status: 'pending', encodedPolyline: null, coordinates: [] } }],
+  };
+  assert.equal(findDirectVariant(route, candidates[0].id, destination.id), undefined, 'the raw-nearest stop alone would wrongly report no route');
+  const connected = candidates.find(candidate => hasDirectRoute([route], candidate.id, destination.id));
+  assert.equal(connected?.id, 'stop-boarding');
 });
 
 test('opening uses public campaign contract and deduplicates counted requests', async t => {
@@ -363,4 +423,99 @@ test('failed identity persistence prevents campaign requests', async t => {
   assert.equal(headers[0]['X-Platform'], 'IOS');
   await createOpeningCampaignLoader(identity, 'web')();
   assert.equal(headers.length, 1);
+});
+
+const geoPolyline = require('@mapbox/polyline');
+
+function walkingService(dummy, apiKey) {
+  service(dummy); // refreshes EXPO_PUBLIC_USE_DUMMY_DATA and transit.ts's cached copy first
+  process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = apiKey ?? '';
+  delete require.cache[require.resolve('../src/services/walkingDirections.ts')];
+  return require('../src/services/walkingDirections.ts');
+}
+
+const ORIGIN = { latitude: 4.8157, longitude: -75.6961 };
+const DESTINATION = { latitude: 4.8143, longitude: -75.6946 };
+
+test('dummy mode returns an instant straight line, never calling fetch', async t => {
+  t.mock.method(global, 'fetch', async () => { throw new Error('HTTP forbidden in dummy mode'); });
+  const api = walkingService(true);
+  const route = await api.getWalkingRoute(ORIGIN, DESTINATION);
+  assert.equal(route.source, 'straight-line');
+  assert.deepEqual(route.coordinates, [ORIGIN, DESTINATION]);
+  assert.ok(route.distanceMeters > 0);
+  assert.equal(route.durationSeconds, Math.round(route.distanceMeters / 1.35));
+});
+
+test('live mode decodes the real polyline and distance/duration on status OK', async t => {
+  const api = walkingService(false, 'test-key');
+  const points = geoPolyline.encode([[ORIGIN.latitude, ORIGIN.longitude], [DESTINATION.latitude, DESTINATION.longitude]]);
+  t.mock.method(global, 'fetch', async () => new Response(JSON.stringify({
+    status: 'OK',
+    routes: [{ overview_polyline: { points }, legs: [{ distance: { value: 812 }, duration: { value: 640 } }] }],
+  }), { status: 200 }));
+  const route = await api.getWalkingRoute(ORIGIN, DESTINATION);
+  assert.equal(route.source, 'google-directions');
+  assert.equal(route.distanceMeters, 812);
+  assert.equal(route.durationSeconds, 640);
+  assert.deepEqual(route.coordinates, [ORIGIN, DESTINATION]);
+});
+
+test('every non-OK Google status rejects with a specific message', async t => {
+  const api = walkingService(false, 'test-key');
+  const cases = [
+    ['ZERO_RESULTS', /no encontró una ruta/],
+    ['NOT_FOUND', /ubicar alguno de los puntos/],
+    ['OVER_QUERY_LIMIT', /límite de consultas/],
+    ['REQUEST_DENIED', /rechazó la solicitud/],
+    ['INVALID_REQUEST', /no fue válida/],
+    ['UNKNOWN_ERROR', /Error temporal/],
+    ['SOMETHING_NEW', /estado no reconocido/],
+  ];
+  for (const [status, expected] of cases) {
+    t.mock.method(global, 'fetch', async () => new Response(JSON.stringify({ status }), { status: 200 }));
+    await assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION), expected);
+  }
+});
+
+test('HTTP failure and caller cancellation are surfaced', async t => {
+  const api = walkingService(false, 'test-key');
+  t.mock.method(global, 'fetch', async () => new Response('{}', { status: 503 }));
+  await assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION), /503/);
+  t.mock.method(global, 'fetch', async (_url, { signal }) => {
+    assert.equal(signal.aborted, true);
+    throw new Error('aborted');
+  });
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION, controller.signal), /aborted/);
+});
+
+test('a stuck request times out and falls back to a clear message', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const api = walkingService(false, 'test-key');
+  t.mock.method(global, 'fetch', (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('aborted by timeout')));
+  }));
+  const pending = assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION), /tardó demasiado/);
+  t.mock.timers.tick(12000);
+  await pending;
+});
+
+test('missing API key rejects before ever calling fetch', async t => {
+  const api = walkingService(false, '');
+  t.mock.method(global, 'fetch', async () => { throw new Error('fetch should not be called'); });
+  await assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION), /EXPO_PUBLIC_GOOGLE_MAPS_API_KEY/);
+});
+
+test('the API key is never written to the logs', async t => {
+  const api = walkingService(false, 'super-secret-key');
+  const logs = [];
+  t.mock.method(console, 'log', (...args) => logs.push(args.join(' ')));
+  const points = geoPolyline.encode([[ORIGIN.latitude, ORIGIN.longitude], [DESTINATION.latitude, DESTINATION.longitude]]);
+  t.mock.method(global, 'fetch', async () => new Response(JSON.stringify({
+    status: 'OK',
+    routes: [{ overview_polyline: { points }, legs: [{ distance: { value: 100 }, duration: { value: 80 } }] }],
+  }), { status: 200 }));
+  await api.getWalkingRoute(ORIGIN, DESTINATION);
+  assert.ok(!logs.some(line => line.includes('super-secret-key')));
 });

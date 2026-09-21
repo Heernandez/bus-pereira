@@ -1,5 +1,5 @@
 import type { Arrival, LiveBus } from './transit';
-import type { RouteOption, RouteVariant } from '../data/mockData';
+import type { RouteOption, RouteVariant } from '../data/catalog';
 import { validCoordinate } from './liveBuses';
 
 export function backendBus(value: unknown, route?: RouteOption, previous?: LiveBus): LiveBus | null {

@@ -1,8 +1,10 @@
 import { useViewTiming } from '../hooks/useViewTiming';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
+  Keyboard,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -18,26 +20,36 @@ import { DataStatus } from '../components/DataStatus';
 import { useRemoteData } from '../hooks/useRemoteData';
 import { getCatalog, USE_DUMMY_DATA } from '../services/transit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useWalkingRoute } from '../hooks/useWalkingRoute';
+import type { WalkingRoute } from '../services/walkingDirections';
 
 import {
+  findDirectVariant,
+  getNearestStops,
   getVariantCoordinates,
-  type MockLocation,
-} from '../data/mockData';
+  hasDirectRoute,
+  sliceRouteSegment,
+  type Location,
+} from '../data/catalog';
 
-type Point = MockLocation & { isCurrent?: boolean };
+type Point = Location & { isCurrent?: boolean };
 
 const isTransitPoint = (point: Point) => point.type === 'stop' || point.type === 'station';
 
-const getNearestStop = (point: Point, stops: MockLocation[]) =>
-  stops.filter(stop => stop.type !== 'poi').reduce<MockLocation | undefined>((nearest, stop) => {
-    if (!nearest) return stop;
-    const nearestDistance =
-      Math.abs(nearest.latitude - point.latitude) + Math.abs(nearest.longitude - point.longitude);
-    const stopDistance =
-      Math.abs(stop.latitude - point.latitude) + Math.abs(stop.longitude - point.longitude);
+const formatWalkingSummary = (route: WalkingRoute) => {
+  const meters = Math.round(route.distanceMeters);
+  const distance = meters < 1000 ? `${meters} m` : `${(meters / 1000).toFixed(1)} km`;
+  const minutes = Math.max(1, Math.ceil(route.durationSeconds / 60));
+  return `${distance} · ${minutes} min`;
+};
 
-    return stopDistance < nearestDistance ? stop : nearest;
-  }, undefined);
+const hexToRgba = (hex: string, alpha: number) => {
+  const value = hex.replace('#', '');
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
 
 export function TripScreen() {
   const insets = useSafeAreaInsets();
@@ -45,7 +57,7 @@ export function TripScreen() {
   const onViewLayout = useViewTiming('Viaje', focused);
   const location = useLocationAccess();
   const catalog = useRemoteData(getCatalog);
-  const mockStops = catalog.data?.stops ?? [];
+  const stopsCatalog = catalog.data?.stops ?? [];
   const routeOptions = catalog.data?.routes ?? [];
   const canInteract = location.state === 'ready' && focused;
   useEffect(() => { if (focused) void location.refresh(); }, [focused, location.refresh]);
@@ -56,57 +68,93 @@ export function TripScreen() {
   const [searchText, setSearchText] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routesCollapsed, setRoutesCollapsed] = useState(false);
+  const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  useEffect(() => { if (!canInteract) setPickerVisible(false); }, [canInteract]);
+  useEffect(() => { if (!canInteract) { setPickerVisible(false); setMapPickerTarget(null); } }, [canInteract]);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSubscription = Keyboard.addListener(showEvent, event => setKeyboardHeight(event.endCoordinates.height));
+    const hideSubscription = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => { showSubscription.remove(); hideSubscription.remove(); };
+  }, []);
 
   const filteredLocations = useMemo(() => {
     const query = searchText.trim().toLowerCase();
 
     if (!query) {
-      return mockStops;
+      return stopsCatalog;
     }
 
-    return mockStops.filter(
+    return stopsCatalog.filter(
       (item) =>
         item.name.toLowerCase().includes(query) || item.subtitle.toLowerCase().includes(query),
     );
   }, [searchText, catalog.data]);
 
+  const connectionStations = useMemo(() => {
+    if (!origin || !destination) return null;
+    const originCandidates = isTransitPoint(origin) ? [origin] : getNearestStops(origin, stopsCatalog);
+    const destinationCandidates = isTransitPoint(destination) ? [destination] : getNearestStops(destination, stopsCatalog);
+    if (!originCandidates.length || !destinationCandidates.length) return null;
+    if (!USE_DUMMY_DATA) {
+      for (const originStation of originCandidates) {
+        for (const destinationStation of destinationCandidates) {
+          if (hasDirectRoute(routeOptions, originStation.id, destinationStation.id)) {
+            return { originStation, destinationStation };
+          }
+        }
+      }
+    }
+    // No candidate pair connects directly (or dummy mode, which doesn't check reachability):
+    // fall back to the closest pair so markers/labels still show something sensible.
+    return { originStation: originCandidates[0], destinationStation: destinationCandidates[0] };
+  }, [origin, destination, catalog.data]);
+
   const routeLines = useMemo(() => {
-    if (!origin || !destination) {
+    if (!origin || !destination || !connectionStations) {
       return [];
     }
 
-    const originStation = isTransitPoint(origin) ? origin : getNearestStop(origin, mockStops);
-    const destinationStation = isTransitPoint(destination) ? destination : getNearestStop(destination, mockStops);
-
-    if (!originStation || !destinationStation) return [];
+    const { originStation, destinationStation } = connectionStations;
     return routeOptions.flatMap((route) => {
-      const variant = USE_DUMMY_DATA ? route.variants[0] : route.variants.find(item => {
-        const from = item.stopSequence.indexOf(originStation.id);
-        return from >= 0 && item.stopSequence.indexOf(destinationStation.id, from + 1) > from;
-      });
+      const variant = USE_DUMMY_DATA ? route.variants[0] : findDirectVariant(route, originStation.id, destinationStation.id);
       if (!variant) return [];
-      const sequenceCoordinates = getVariantCoordinates(variant, mockStops);
+      const sequenceCoordinates = getVariantCoordinates(variant, stopsCatalog);
+      const from = variant.stopSequence.indexOf(originStation.id);
+      const to = variant.stopSequence.indexOf(destinationStation.id, from + 1);
+      const stopSegment = from >= 0 && to > from ? variant.stopSequence.slice(from, to + 1) : variant.stopSequence;
+      const stopNames = stopSegment.map(id => stopsCatalog.find(stop => stop.id === id)?.name ?? 'Estación sin información');
+      const stopCoordinates = variant.stopSequence.map(id => stopsCatalog.find(stop => stop.id === id));
 
       return {
         ...route,
-        originStation,
-        destinationStation,
-        transitCoordinates: !USE_DUMMY_DATA ? sequenceCoordinates : variant.geometry.coordinates.length
-          ? [originStation, ...variant.geometry.coordinates, destinationStation]
-          : [originStation, ...sequenceCoordinates, destinationStation],
-        walkingSegments: [
-          ...(isTransitPoint(origin) ? [] : [[origin, originStation]]),
-          ...(isTransitPoint(destination) ? [] : [[destinationStation, destination]]),
-        ],
+        stopNames,
+        // Only the boarding→alighting stretch the passenger actually rides, never the full terminal-to-terminal shape.
+        transitCoordinates: from >= 0 && to > from
+          ? sliceRouteSegment(sequenceCoordinates, stopCoordinates, from, to)
+          : [originStation, destinationStation],
       };
     });
-  }, [destination, origin, catalog.data]);
+  }, [destination, origin, catalog.data, connectionStations]);
 
   const visibleRoutes = selectedRouteId
     ? routeLines.filter((route) => route.id === selectedRouteId)
     : routeLines;
+
+  const primaryRouteId = selectedRouteId ?? routeLines[0]?.id ?? null;
+  const primaryRoute = routeLines.find((route) => route.id === primaryRouteId) ?? null;
+
+  const originWalk = useWalkingRoute(
+    origin && connectionStations && !isTransitPoint(origin) ? origin : null,
+    connectionStations?.originStation ?? null,
+  );
+  const destinationWalk = useWalkingRoute(
+    connectionStations?.destinationStation ?? null,
+    destination && connectionStations && !isTransitPoint(destination) ? destination : null,
+  );
 
   const selectPoint = (point: Point, mode = selectionMode) => {
     if (!canInteract) return;
@@ -134,14 +182,21 @@ export function TripScreen() {
   };
 
   const selectMapPoint = (coordinate: { latitude: number; longitude: number }) => {
+    if (!mapPickerTarget) return;
     selectPoint({
-      id: `${selectionMode}-map-point`,
-      name: selectionMode === 'origin' ? 'Origen seleccionado' : 'Destino seleccionado',
+      id: `${mapPickerTarget}-map-point`,
+      name: mapPickerTarget === 'origin' ? 'Origen seleccionado' : 'Destino seleccionado',
       subtitle: 'Punto elegido en el mapa',
       latitude: coordinate.latitude,
       longitude: coordinate.longitude,
       type: 'poi',
-    });
+    }, mapPickerTarget);
+    setMapPickerTarget(null);
+  };
+
+  const beginMapSelection = () => {
+    setMapPickerTarget(selectionMode);
+    setPickerVisible(false);
   };
 
   const openPicker = (mode: 'origin' | 'destination') => {
@@ -157,6 +212,7 @@ export function TripScreen() {
     setSearchText('');
     setPickerVisible(false);
     setSelectionMode('origin');
+    setMapPickerTarget(null);
   };
 
   const swapTripPoints = () => {
@@ -170,6 +226,7 @@ export function TripScreen() {
     setRoutesCollapsed(false);
     setSearchText('');
     setPickerVisible(false);
+    setMapPickerTarget(null);
   };
 
   if (!catalog.data) return <LocationGate><View onLayout={onViewLayout} style={[styles.container, { justifyContent: 'center' }]}><DataStatus error={catalog.error} retry={catalog.reload} /></View></LocationGate>;
@@ -204,41 +261,52 @@ export function TripScreen() {
             pinColor="#dc2626"
           />
         )}
-        {routeLines[0]?.originStation && !isTransitPoint(origin as Point) && (
+        {connectionStations?.originStation && origin && !isTransitPoint(origin) && (
           <Marker
-            coordinate={routeLines[0].originStation}
+            coordinate={connectionStations.originStation}
             title="Estación de conexión de origen"
-            description={routeLines[0].originStation.name}
-            pinColor="#1f6feb"
+            description={connectionStations.originStation.name}
+            pinColor="#475569"
           />
         )}
-        {routeLines[0]?.destinationStation && !isTransitPoint(destination as Point) && (
+        {connectionStations?.destinationStation && destination && !isTransitPoint(destination) && (
           <Marker
-            coordinate={routeLines[0].destinationStation}
+            coordinate={connectionStations.destinationStation}
             title="Estación de conexión de destino"
-            description={routeLines[0].destinationStation.name}
-            pinColor="#dc2626"
+            description={connectionStations.destinationStation.name}
+            pinColor="#475569"
           />
         )}
-        {visibleRoutes.map((route) => (
-          <React.Fragment key={route.id}>
+        {visibleRoutes.map((route) => {
+          const isPrimary = route.id === primaryRouteId;
+          return (
             <Polyline
+              key={route.id}
               coordinates={route.transitCoordinates}
-              strokeColor={route.color}
-              strokeWidth={route.id === 'fastest' ? 5 : 3}
-              lineDashPattern={route.id === 'fastest' ? undefined : [8, 6]}
+              strokeColor={isPrimary ? route.color : hexToRgba(route.color, 0.45)}
+              strokeWidth={isPrimary ? 6 : 3}
+              zIndex={isPrimary ? 2 : 1}
             />
-            {route.walkingSegments.map((segment, segmentIndex) => (
-              <Polyline
-                key={`${route.id}-walk-${segmentIndex}`}
-                coordinates={segment}
-                strokeColor="#475569"
-                strokeWidth={3}
-                lineDashPattern={[4, 6]}
-              />
-            ))}
-          </React.Fragment>
-        ))}
+          );
+        })}
+        {originWalk.route && (
+          <Polyline
+            key="walk-origin"
+            coordinates={originWalk.route.coordinates}
+            strokeColor="#475569"
+            strokeWidth={3}
+            lineDashPattern={[4, 6]}
+          />
+        )}
+        {destinationWalk.route && (
+          <Polyline
+            key="walk-destination"
+            coordinates={destinationWalk.route.coordinates}
+            strokeColor="#475569"
+            strokeWidth={3}
+            lineDashPattern={[4, 6]}
+          />
+        )}
       </MapView>
 
       <View style={[styles.topPanel, { top: 16 + insets.top }]}>
@@ -314,12 +382,35 @@ export function TripScreen() {
         </View>
 
         {location.positionError && <Pressable onPress={() => void location.locate()}><Text style={styles.mapHint}>{location.positionError} Toca para reintentar.</Text></Pressable>}
-        {!USE_DUMMY_DATA && origin && destination && routeLines.length === 0 && <Text style={styles.mapHint}>No encontramos una ruta directa entre estas paradas. La búsqueda con transbordos aún no está disponible.</Text>}
-        <Text style={styles.mapHint}>
-          <Ionicons name="hand-left-outline" size={13} color="#64748b" />{' '}
-          También puedes tocar el mapa para marcar el {selectionMode === 'origin' ? 'origen' : 'destino'}.
-        </Text>
+        {(originWalk.route || destinationWalk.route) && (
+          <Text style={styles.mapHint}>
+            {originWalk.route ? `Caminata al origen: ${formatWalkingSummary(originWalk.route)}` : ''}
+            {originWalk.route && destinationWalk.route ? ' · ' : ''}
+            {destinationWalk.route ? `Caminata al destino: ${formatWalkingSummary(destinationWalk.route)}` : ''}
+          </Text>
+        )}
+        {!USE_DUMMY_DATA && (originWalk.error || destinationWalk.error) && (
+          <Text style={styles.mapHint}>No pudimos calcular la ruta a pie exacta; se muestra una línea aproximada.</Text>
+        )}
+        {mapPickerTarget && (
+          <Pressable style={styles.mapPickerHint} onPress={() => setMapPickerTarget(null)}>
+            <Ionicons name="hand-left-outline" size={14} color="#1f6feb" />
+            <Text style={styles.mapPickerHintText}>
+              Toca el mapa para marcar tu {mapPickerTarget === 'origin' ? 'origen' : 'destino'}.
+            </Text>
+            <Ionicons name="close-circle" size={16} color="#94a3b8" />
+          </Pressable>
+        )}
       </View>
+
+      {!USE_DUMMY_DATA && origin && destination && routeLines.length === 0 && (
+        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}>
+          <View style={styles.noRouteRow}>
+            <Ionicons name="alert-circle-outline" size={22} color="#dc2626" />
+            <Text style={styles.noRouteText}>No encontramos una ruta directa entre estas paradas. La búsqueda con transbordos aún no está disponible.</Text>
+          </View>
+        </View>
+      )}
 
       {routeLines.length > 0 && !routesCollapsed && (
         <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}>
@@ -327,7 +418,7 @@ export function TripScreen() {
             <View>
               <Text style={styles.routesTitle}>Rutas disponibles</Text>
               <Text style={styles.routesSubtitle}>
-                {routeLines.some((route) => route.walkingSegments.length > 0)
+                {originWalk.route || destinationWalk.route
                   ? 'Línea continua: bus · punteada: caminata'
                   : USE_DUMMY_DATA ? 'Opciones simuladas para tu recorrido' : 'Rutas directas que conectan tus paradas'}
               </Text>
@@ -352,7 +443,7 @@ export function TripScreen() {
             contentContainerStyle={styles.routeList}
             renderItem={({ item }) => (
               <Pressable
-                style={[styles.routeCard, selectedRouteId === item.id && styles.routeCardSelected]}
+                style={[styles.routeCard, primaryRouteId === item.id && styles.routeCardSelected]}
                 onPress={() => setSelectedRouteId(item.id)}
                 accessibilityLabel={`Mostrar ${item.name} en el mapa`}
                 accessibilityRole="button"
@@ -362,7 +453,7 @@ export function TripScreen() {
                   <View style={styles.routeCardTop}>
                     <Text style={styles.routeName}>{item.name}</Text>
                     <Ionicons
-                      name={selectedRouteId === item.id ? 'checkmark-circle' : 'arrow-forward-circle'}
+                      name={primaryRouteId === item.id ? 'checkmark-circle' : 'arrow-forward-circle'}
                       size={22}
                       color={item.color}
                     />
@@ -377,6 +468,23 @@ export function TripScreen() {
               </Pressable>
             )}
           />
+
+          {primaryRoute && (
+            <View style={styles.stopListContainer}>
+              <Text style={styles.stopListTitle}>Estaciones del recorrido</Text>
+              <FlatList
+                data={primaryRoute.stopNames}
+                keyExtractor={(name, index) => `${name}-${index}`}
+                style={styles.stopListScroll}
+                renderItem={({ item: name, index }) => (
+                  <View style={styles.stopRow}>
+                    <Text style={[styles.stopDot, { color: primaryRoute.color }]}>●</Text>
+                    <Text style={styles.stopName} numberOfLines={1}>{index + 1}. {name}</Text>
+                  </View>
+                )}
+              />
+            </View>
+          )}
         </View>
       )}
 
@@ -397,7 +505,7 @@ export function TripScreen() {
 
       <Modal transparent animationType="slide" visible={pickerVisible && canInteract} onRequestClose={() => setPickerVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setPickerVisible(false)} />
-        <View style={[styles.modalContainer, { paddingBottom: 24 + insets.bottom }]}>
+        <View style={[styles.modalContainer, { bottom: keyboardHeight, paddingBottom: keyboardHeight > 0 ? 12 : 24 + insets.bottom }]}>
           <View style={styles.modalHeader}>
             <View>
               <Text style={styles.modalEyebrow}>
@@ -436,6 +544,18 @@ export function TripScreen() {
             keyExtractor={(item) => item.id}
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.suggestionList}
+            ListHeaderComponent={
+              <Pressable style={styles.mapPickerItem} onPress={beginMapSelection}>
+                <View style={styles.mapPickerIcon}>
+                  <Ionicons name="locate-outline" size={18} color="#1f6feb" />
+                </View>
+                <View style={styles.suggestionText}>
+                  <Text style={styles.suggestionName}>Selecciona en el mapa</Text>
+                  <Text style={styles.suggestionSubtitle}>Toca cualquier punto del mapa para marcarlo</Text>
+                </View>
+                <Ionicons name="map-outline" size={20} color="#1f6feb" />
+              </Pressable>
+            }
             renderItem={({ item }) => (
               <Pressable style={styles.suggestionItem} onPress={() => selectPoint(item)}>
                 <View style={styles.suggestionIcon}>
@@ -593,6 +713,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 12,
   },
+  mapPickerHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+  },
+  mapPickerHintText: {
+    flex: 1,
+    color: '#1f6feb',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   routesPanel: {
     position: 'absolute',
     left: 0,
@@ -607,6 +742,18 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: -3 },
     elevation: 8,
+  },
+  noRouteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 18,
+  },
+  noRouteText: {
+    flex: 1,
+    color: '#475569',
+    fontSize: 13,
+    lineHeight: 19,
   },
   routesHeader: {
     flexDirection: 'row',
@@ -740,6 +887,34 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 10,
   },
+  stopListContainer: {
+    marginTop: 14,
+    paddingHorizontal: 18,
+  },
+  stopListTitle: {
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  stopListScroll: {
+    maxHeight: 150,
+  },
+  stopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  stopDot: {
+    fontSize: 14,
+  },
+  stopName: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.3)',
@@ -812,6 +987,24 @@ const styles = StyleSheet.create({
     borderColor: '#edf2f7',
   },
   suggestionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#dbeafe',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapPickerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderRadius: 14,
+    padding: 11,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  mapPickerIcon: {
     width: 36,
     height: 36,
     borderRadius: 18,

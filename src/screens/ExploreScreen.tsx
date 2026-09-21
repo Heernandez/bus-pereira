@@ -30,7 +30,7 @@ import { MapDetailSheet, sheetHeight } from '../components/map/MapDetailSheet';
 import { initialMapState, mapSelectionReducer } from '../services/mapSelection';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { type MockLocation, type RouteOption, type RouteVariant } from '../data/mockData';
+import { type Location, type RouteOption, type RouteVariant } from '../data/catalog';
 
 export function ExploreScreen() {
   useEffect(() => { startupOnce('Explorar: montado'); }, []);
@@ -155,7 +155,7 @@ export function ExploreScreen() {
   const onMapLoaded = useCallback(() => { startupOnce('Mapa: onMapLoaded'); setMapLoaded(true); setMapTimedOut(false); }, []);
   const onExploreLayout = useCallback(() => { onViewLayout(); startupOnce('Explorar: primer layout'); setLayoutReady(true); }, [onViewLayout]);
   const onMapReady = useCallback(() => { startupOnce('Mapa: onMapReady'); setMapReady(true); }, []);
-  const openStationRoutes = useCallback((stop: MockLocation) => {
+  const openStationRoutes = useCallback((stop: Location) => {
     if (!canInteract) return;
     dispatch({ type: 'select', selection: { type: 'station', stationId: stop.id } });
     setSearchVisible(false);

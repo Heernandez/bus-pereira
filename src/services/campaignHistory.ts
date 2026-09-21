@@ -27,7 +27,12 @@ export function createCampaignHistory(storage: Storage) {
       const ids = new Set(campaigns.map(campaign => campaign.id));
       for (const id of counts.keys()) if (!ids.has(id)) counts.delete(id);
       await write(counts);
-      return campaigns.filter(campaign => (counts.get(campaign.id) ?? 0) < campaign.maxViewsPerDevice);
+      return campaigns.filter(campaign => {
+        const views = counts.get(campaign.id) ?? 0;
+        const eligible = views < campaign.maxViewsPerDevice;
+        console.info('[Campañas] Elegibilidad', { id: campaign.id, views, maxViewsPerDevice: campaign.maxViewsPerDevice, eligible });
+        return eligible;
+      });
     }),
     complete: (campaign: Campaign) => serial(async () => {
       const counts = await read();

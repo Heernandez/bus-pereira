@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(npx expo *)",
+      "Bash(node -e ' *)"
+    ]
+  },
   "enabledPlugins": {
     "expo@claude-plugins-official": true
   }

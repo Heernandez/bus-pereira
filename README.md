@@ -249,7 +249,7 @@ Para cambios posteriores de TypeScript, puedes volver a usar:
 npx expo start --dev-client
 ```
 
-Mientras se construye el backend, los datos de prueba se mantienen en `src/data/mockData.json`. Puedes agregar o modificar paradas y rutas allí; al recargar Metro, la aplicación utilizará esos cambios.
+Los datos de prueba (modo dummy) se mantienen en `src/data/dummyData.json`. Puedes agregar o modificar paradas y rutas allí; al recargar Metro, la aplicación utilizará esos cambios.
 
 ### Formato temporal de rutas
 
@@ -294,8 +294,8 @@ bus-pereira/
 ├── App.tsx
 ├── src/
 │   ├── data/
-│   │   ├── mockData.json
-│   │   └── mockData.ts
+│   │   ├── dummyData.json
+│   │   └── catalog.ts
 │   └── screens/
 │       └── ExploreScreen.tsx
 ├── app.json
@@ -356,7 +356,7 @@ EXPO_PUBLIC_API_URL=http://10.0.2.2:3000/api/v1
 
 El backend puede devolver `meta.source: "demo"` incluso con el modo API activado. La pantalla identifica las llegadas simuladas, por horario, GPS o sin estimación. Consulta de llegadas cada 30 segundos (o el intervalo indicado por la API) mientras el modal está visible y la app está activa; cancela peticiones al cambiar de estación o cerrar.
 
-En modo API, Viaje filtra variantes que conectan las paradas en el sentido correcto y muestra el trazado completo de la variante. Todavía no existe planificación con transbordos, cálculo de caminatas por calles o duración real del itinerario. El catálogo de pasabordos sí se consulta; compras e historial remoto están pendientes del backend, por lo que no se generan tickets dummy en modo API. Google Sign-In conserva su integración actual.
+En modo API, Viaje filtra variantes que conectan las paradas en el sentido correcto, muestra el trazado completo de la variante y calcula la caminata real hacia/desde la estación de conexión con la Directions API de Google (ver [docs/walking-directions.md](docs/walking-directions.md)). Todavía no existe planificación con transbordos ni duración real de todo el itinerario (bus + caminata combinados). El catálogo de pasabordos sí se consulta; compras e historial remoto están pendientes del backend, por lo que no se generan tickets dummy en modo API. Google Sign-In conserva su integración actual.
 
 ## Ubicación en Explorar y Viaje
 
@@ -399,3 +399,13 @@ Esta integración reemplaza el comportamiento anterior de consultar llegadas sol
 La recuperación de Google ahora ocurre al iniciar la app. La publicidad de apertura consume `/campaigns/active` sin autenticación y con una consulta por apertura. El endpoint de pasabordos autenticados sigue pendiente en el backend. Contratos y pruebas manuales: [docs/app-opening.md](docs/app-opening.md).
 
 Campañas múltiples con límite por dispositivo: [contrato y JSON para backend](docs/campaigns.md). Requiere recompilar la app nativa para incorporar AsyncStorage.
+
+## Viaje: ruta a pie real
+
+El tramo caminando entre un punto libre (mapa/"mi ubicación") y la estación de conexión elegida —origen y destino— se calcula con la Directions API de Google llamada directamente desde el móvil, en vez de una línea recta. La estación de conexión sigue eligiéndose igual que antes (distancia tipo Manhattan, sin comparar caminatas reales entre candidatas).
+
+```dotenv
+EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=
+```
+
+Reutiliza la misma key de `androidGoogleMapsApiKey`/`iosGoogleMapsApiKey` en `app.json`; requiere habilitar "Directions API" para esa key en Google Cloud Console. Contrato, manejo de errores de Google y pruebas manuales: [docs/walking-directions.md](docs/walking-directions.md).

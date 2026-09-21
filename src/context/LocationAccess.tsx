@@ -3,7 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { AppState, Linking, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { resolveLocationAccess, type AccessState } from '../services/locationAccess';
-import type { Coordinate } from '../data/mockData';
+import type { Coordinate } from '../data/catalog';
 
 const adapter = {
   permission: Location.getForegroundPermissionsAsync,

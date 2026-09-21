@@ -18,7 +18,7 @@ export function OpeningCampaign({ campaign, dismiss }: { campaign: Campaign | nu
   useEffect(() => {
     if (!campaign || loaded) return;
     if (!imageTiming.current) imageTiming.current = startupSpan('Campaña: cargar imagen');
-    const timeout = setTimeout(() => { imageTiming.current?.('timeout'); finishRef.current(false); }, 10000);
+    const timeout = setTimeout(() => { console.warn('[Campañas] Tiempo de carga de imagen agotado', { id: campaign.id }); imageTiming.current?.('timeout'); finishRef.current(false); }, 10000);
     return () => clearTimeout(timeout);
   }, [campaign, loaded, dismiss]);
   useEffect(() => {
@@ -43,7 +43,7 @@ export function OpeningCampaign({ campaign, dismiss }: { campaign: Campaign | nu
     {campaign ? <>
       <Text style={{ textAlign: 'center', padding: 16 }}>Publicidad{loaded ? ` · ${remaining} s` : ''}</Text>
       <Image source={{ uri: campaign.imageUrl }} style={{ flex: 1 }} resizeMode="contain"
-        accessibilityLabel={campaign.accessibilityLabel} onLoad={() => { imageTiming.current?.('ok'); startupLog('Campaña: empieza exposición', { seconds: campaign.durationSeconds }); setRemaining(campaign.durationSeconds); setLoaded(true); }} onError={() => { imageTiming.current?.('error'); finishRef.current(false); }} />
+        accessibilityLabel={campaign.accessibilityLabel} onLoad={() => { console.info('[Campañas] Imagen cargada', { id: campaign.id }); imageTiming.current?.('ok'); startupLog('Campaña: empieza exposición', { seconds: campaign.durationSeconds }); setRemaining(campaign.durationSeconds); setLoaded(true); }} onError={event => { console.warn('[Campañas] Error de imagen', { id: campaign.id, error: event.nativeEvent.error }); imageTiming.current?.('error'); finishRef.current(false); }} />
       {!loaded && <ActivityIndicator style={{ padding: 20 }} color="#1f6feb" />}
     </> : <><ActivityIndicator color="#1f6feb" /><Text style={{ textAlign: 'center', marginTop: 12 }}>Preparando tu viaje…</Text></>}
   </View>;
