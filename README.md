@@ -91,6 +91,40 @@ npm run web
 
 La versión web sirve para revisar la interfaz, pero algunas funciones nativas como ubicación y mapas pueden comportarse diferente a Android.
 
+### Opción 5: compilar e instalar un APK release
+
+Con el teléfono conectado por USB y visible en `adb devices`, ejecuta desde la raíz del proyecto:
+
+```bash
+cd android
+./gradlew assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+`assembleRelease` genera el APK, pero **no lo instala en el teléfono**. El comando `adb install -r` instala el release sobre la app existente conservando sus datos, siempre que la firma sea compatible. Después abre Bus Pereira en el teléfono; esta versión incluye JavaScript y funciona sin Metro.
+
+Antes de compilar, verifica la configuración del backend en tus archivos `.env`:
+
+```dotenv
+EXPO_PUBLIC_USE_DUMMY_DATA=false
+EXPO_PUBLIC_API_URL=https://heernandezdev.com/buses/api/v1
+```
+
+Si cambias estas variables o el código JavaScript/TypeScript, vuelve a compilar e instalar el release para incluir los cambios.
+
+#### Si la app se queda en el splash
+
+Comprueba que instalaste el APK generado. Una versión debug que sigue instalada puede quedarse en el splash intentando conectarse a Metro en `localhost:8081`; esto puede parecer un fallo del backend aunque todavía no se haya ejecutado el código que lo consulta.
+
+Puedes revisar el tipo de app instalada y los registros con:
+
+```bash
+adb shell dumpsys package com.heernandez.buspereira | grep 'flags='
+adb logcat -v time ReactNativeJS:V AndroidRuntime:E '*:S'
+```
+
+En este proyecto, `DEBUGGABLE` en los flags indica que sigue instalada una versión debug. Abre la app mientras observas los registros: las líneas `[HTTP] GET ... -> 200` confirman que el backend respondió correctamente. Si quieres usar debug, inicia Metro; para probar sin Metro, instala el release con el comando anterior.
+
 ## Ejecutar en tu teléfono Android conectado por USB
 
 ### 1) Habilita depuración USB en tu celular
