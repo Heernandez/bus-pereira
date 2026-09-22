@@ -16,6 +16,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 
 import { LocationAccessProvider } from './src/context/LocationAccess';
 import { getTabBarStyle } from './src/navigation/tabBar';
+import { StatusBarSpacer } from './src/components/StatusBarSpacer';
 
 import { ExploreScreen } from './src/screens/ExploreScreen';
 import { TripScreen } from './src/screens/TripScreen';
@@ -45,17 +46,20 @@ function PlaceholderScreen({
   const insets = useSafeAreaInsets();
 
   return (
-    <View onLayout={onViewLayout}
-      style={[
-        styles.placeholderContainer,
-        { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 96 },
-      ]}
-    >
-      <View style={styles.iconCircle}>
-        <Ionicons name={icon} size={32} color="#1f6feb" />
+    <View style={styles.placeholderWrap}>
+      <StatusBarSpacer />
+      <View onLayout={onViewLayout}
+        style={[
+          styles.placeholderContainer,
+          { paddingTop: 24, paddingBottom: insets.bottom + 96 },
+        ]}
+      >
+        <View style={styles.iconCircle}>
+          <Ionicons name={icon} size={32} color="#1f6feb" />
+        </View>
+        <Text style={styles.placeholderTitle}>{title}</Text>
+        <Text style={styles.placeholderSubtitle}>{subtitle}</Text>
       </View>
-      <Text style={styles.placeholderTitle}>{title}</Text>
-      <Text style={styles.placeholderSubtitle}>{subtitle}</Text>
     </View>
   );
 }
@@ -143,11 +147,14 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
+  placeholderWrap: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
   placeholderContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#f8fafc',
     paddingHorizontal: 24,
   },
   iconCircle: {

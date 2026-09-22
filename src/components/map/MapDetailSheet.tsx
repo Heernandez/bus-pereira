@@ -5,9 +5,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export const sheetHeight = (height: number, expanded: boolean) => expanded ? Math.min(440, height * 0.55) : 98;
 
-export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, showBackButton = true, onClear, children }: {
+export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, showBackButton = true, onClear, bottomOffset = 86, children }: {
   title: string; subtitle: string; expanded: boolean; onExpand: (expanded: boolean) => void;
-  onBack: () => void; showBackButton?: boolean; onClear: () => void; children: React.ReactNode;
+  onBack: () => void; showBackButton?: boolean; onClear: () => void;
+  // Extra clearance above the safe-area inset, for a tab bar still showing behind the sheet.
+  bottomOffset?: number; children: React.ReactNode;
 }) {
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -23,7 +25,7 @@ export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, sh
     },
     onPanResponderTerminate: () => Animated.timing(size, { toValue: sheetHeight(height, expanded), duration: 220, useNativeDriver: false }).start(),
   }), [expanded, height, onExpand, size]);
-  return <Animated.View style={[styles.sheet, { bottom: 86 + insets.bottom, height: size }]}>
+  return <Animated.View style={[styles.sheet, { bottom: bottomOffset + insets.bottom, height: size }]}>
     <View {...gesture.panHandlers}><Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Minimizar detalle' : 'Expandir detalle'} onPress={() => onExpand(!expanded)} style={styles.handleArea}><View style={styles.handle} /></Pressable></View>
     <View style={styles.header}>
       {showBackButton && <Pressable accessibilityRole="button" accessibilityLabel="Volver a la selección anterior" onPress={onBack} style={styles.control}><Ionicons name="arrow-back" size={22} color="#1f6feb" /></Pressable>}

@@ -4,6 +4,7 @@ import {
   BackHandler,
   FlatList,
   ActivityIndicator,
+  ScrollView,
   useWindowDimensions,
   Keyboard,
   Modal,
@@ -17,15 +18,16 @@ import {
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
-import { useBottomTabBarHeight, type BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useLocationAccess } from '../context/LocationAccess';
 import { LocationGate } from '../components/LocationGate';
 import { DataStatus } from '../components/DataStatus';
+import { StatusBarSpacer } from '../components/StatusBarSpacer';
 import { MapDetailSheet, sheetHeight } from '../components/map/MapDetailSheet';
 import { useRemoteData } from '../hooks/useRemoteData';
 import { getCatalog, USE_DUMMY_DATA } from '../services/transit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useJourneyPlan } from '../hooks/useJourneyPlan';
+import { useJourneyPlan, type JourneyQuery } from '../hooks/useJourneyPlan';
 import { formatDistance, formatDuration, itineraryTitle, itineraryColor, itineraryDuration, journeyTimeline, walkStepLabel, busWaitLabel, noJourneyMessage } from '../services/journeyPresentation';
 import { getTabBarStyle } from '../navigation/tabBar';
 import type { JourneyPreference } from '../types/journey';
@@ -55,7 +57,6 @@ export function TripScreen() {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [routesCollapsed, setRoutesCollapsed] = useState(false);
   const [viewingDetail, setViewingDetail] = useState(false);
   const [detailExpanded, setDetailExpanded] = useState(false);
   const closeDetail = () => { setViewingDetail(false); setDetailExpanded(false); };
@@ -72,15 +73,14 @@ export function TripScreen() {
   const screenActive = useRef(false);
   screenActive.current = canInteract;
   useEffect(() => () => { screenActive.current = false; }, []);
-  const [occupiedBottom, setOccupiedBottom] = useState(0);
-  useEffect(() => { if (!origin || !destination) setOccupiedBottom(0); }, [origin, destination]);
-  const tabBarHeight = useBottomTabBarHeight();
   const { height } = useWindowDimensions();
-  const query = useMemo(() => origin && destination ? {
-    origin: journeyPoint(origin), destination: journeyPoint(destination),
-    preferences: { optimize: preference, maxWalkingDistanceMeters, maxTransfers },
-  } : null, [origin, destination, preference, maxWalkingDistanceMeters, maxTransfers]);
-  const plan = useJourneyPlan(query);
+  const showingMap = viewingDetail || !!mapPickerTarget;
+
+  // The search only runs when the user taps "Buscar viajes"; editing anything
+  // afterwards clears this so stale results are never shown for a different
+  // origin/destination/preference than what's on screen.
+  const [activeQuery, setActiveQuery] = useState<JourneyQuery | null>(null);
+  const plan = useJourneyPlan(activeQuery);
   const itineraries = plan.data?.data.itineraries ?? [];
   const primaryItinerary = itineraries.find(item => item.id === selectedRouteId) ?? itineraries[0] ?? null;
   const busWaypoints = useMemo(() => {
@@ -106,29 +106,31 @@ export function TripScreen() {
     return waypoints;
   }, [primaryItinerary]);
   const timeline = useMemo(() => primaryItinerary ? journeyTimeline(primaryItinerary) : [], [primaryItinerary]);
+
   useEffect(() => {
-    if (!mapReady || !primaryItinerary) return;
-    const top = viewingDetail ? 24 + insets.top : Math.min(height * 0.32, 290);
-    const bottom = viewingDetail ? 24 + insets.bottom + sheetHeight(height, detailExpanded) : Math.min(height * 0.36, 320);
+    if (!viewingDetail || !mapReady || !primaryItinerary) return;
+    const top = 24 + insets.top;
+    const bottom = 24 + insets.bottom + sheetHeight(height, detailExpanded);
     mapRef.current?.fitToCoordinates(primaryItinerary.legs.flatMap(leg => leg.geometry.coordinates), {
       edgePadding: { top, bottom, left: 45, right: 45 }, animated: true,
     });
-  }, [primaryItinerary, mapReady, height, viewingDetail, detailExpanded, insets.top, insets.bottom]);
+  }, [viewingDetail, primaryItinerary, mapReady, height, detailExpanded, insets.top, insets.bottom]);
 
-  // Give the full screen to the route graphic while its own back button is visible;
-  // the parent Tab.Navigator reads this option back from us.
+  // Give the full screen to the map (route detail or picking a point) while its
+  // own back button is visible; the parent Tab.Navigator reads this option back.
   useEffect(() => {
-    navigation.setOptions({ tabBarStyle: viewingDetail ? { display: 'none' } : getTabBarStyle(insets.bottom) });
-  }, [navigation, viewingDetail, insets.bottom]);
+    navigation.setOptions({ tabBarStyle: showingMap ? { display: 'none' } : getTabBarStyle(insets.bottom) });
+  }, [navigation, showingMap, insets.bottom]);
 
   useEffect(() => {
-    if (!viewingDetail) return;
+    if (!showingMap) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (detailExpanded) setDetailExpanded(false); else closeDetail();
+      if (viewingDetail) { if (detailExpanded) setDetailExpanded(false); else closeDetail(); }
+      else setMapPickerTarget(null);
       return true;
     });
     return () => subscription.remove();
-  }, [viewingDetail, detailExpanded]);
+  }, [showingMap, viewingDetail, detailExpanded]);
 
   useEffect(() => { if (!canInteract) { setPickerVisible(false); setMapPickerTarget(null); setOptionsVisible(false); } }, [canInteract]);
 
@@ -156,7 +158,7 @@ export function TripScreen() {
   const selectPoint = (point: Point, mode = selectionMode) => {
     if (!canInteract) return;
     setSelectedRouteId(null);
-    setRoutesCollapsed(false);
+    setActiveQuery(null);
     closeDetail();
 
     if (mode === 'origin') {
@@ -193,6 +195,7 @@ export function TripScreen() {
   };
 
   const beginMapSelection = () => {
+    setMapReady(false);
     setMapPickerTarget(selectionMode);
     setPickerVisible(false);
   };
@@ -206,7 +209,7 @@ export function TripScreen() {
     setOrigin(null);
     setDestination(null);
     setSelectedRouteId(null);
-    setRoutesCollapsed(false);
+    setActiveQuery(null);
     closeDetail();
     setSearchText('');
     setPickerVisible(false);
@@ -222,11 +225,27 @@ export function TripScreen() {
     setOrigin(destination);
     setDestination(origin);
     setSelectedRouteId(null);
-    setRoutesCollapsed(false);
+    setActiveQuery(null);
     closeDetail();
     setSearchText('');
     setPickerVisible(false);
     setMapPickerTarget(null);
+  };
+
+  const runSearch = () => {
+    if (!origin || !destination) return;
+    setSelectedRouteId(null);
+    setActiveQuery({
+      origin: journeyPoint(origin), destination: journeyPoint(destination),
+      preferences: { optimize: preference, maxWalkingDistanceMeters, maxTransfers },
+    });
+  };
+
+  const openRoute = (itineraryId: string) => {
+    setSelectedRouteId(itineraryId);
+    setDetailExpanded(false);
+    setMapReady(false);
+    setViewingDetail(true);
   };
 
   const centerOnMe = async () => {
@@ -251,48 +270,189 @@ export function TripScreen() {
   const defaultRegion = catalog.data.city.defaultRegion;
   return (
     <LocationGate><View onLayout={onViewLayout} style={styles.container}>
-      <MapView
-        ref={mapRef}
-        onMapReady={() => setMapReady(true)}
-        provider={PROVIDER_GOOGLE}
-        style={StyleSheet.absoluteFill}
-        initialRegion={defaultRegion}
-        scrollEnabled={canInteract}
-        zoomEnabled={canInteract}
-        rotateEnabled={canInteract}
-        pitchEnabled={canInteract}
-        showsUserLocation={canInteract}
-        showsCompass
-        onPress={(event) => selectMapPoint(event.nativeEvent.coordinate)}
-      >
-        {origin && (
-          <Marker
-            coordinate={origin}
-            title="Origen"
-            description={origin.name}
-            pinColor="#1f6feb"
-          />
-        )}
-        {destination && (
-          <Marker
-            coordinate={destination}
-            title="Destino"
-            description={destination.name}
-            pinColor="#dc2626"
-          />
-        )}
-        {busWaypoints.map((waypoint, index) => (
-          <Marker key={`waypoint-${index}-${waypoint.place.stopId ?? `${waypoint.place.latitude},${waypoint.place.longitude}`}`}
-            coordinate={waypoint.place} title={waypoint.entries.map(entry => entry.label).join(' · ')}
-            description={waypoint.place.name} pinColor={waypoint.entries.length > 1 ? '#0f766e' : waypoint.entries[0].color} />
-        ))}
-        {primaryItinerary?.legs.map(leg => (
-          <Polyline key={`${primaryItinerary.id}:${leg.id}`} coordinates={leg.geometry.coordinates}
-            strokeColor={leg.mode === 'bus' ? leg.color : '#475569'}
-            strokeWidth={leg.mode === 'bus' ? 6 : 3}
-            lineDashPattern={leg.mode === 'walk' || leg.geometry.source === 'approximate' ? [4, 6] : undefined} />
-        ))}
-      </MapView>
+
+      {!showingMap && (
+        <>
+          <StatusBarSpacer />
+          <ScrollView contentContainerStyle={[styles.formContent, { paddingBottom: 104 + insets.bottom }]} keyboardShouldPersistTaps="handled">
+            <View style={styles.titleRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.eyebrow}>PLANEA TU VIAJE</Text>
+                <Text style={styles.title}>¿A dónde quieres ir?</Text>
+              </View>
+              {(origin || destination || activeQuery || searchText) && (
+                <Pressable style={styles.clearTripButton} onPress={clearTrip} accessibilityLabel="Limpiar búsqueda">
+                  <Ionicons name="refresh-outline" size={15} color="#dc2626" />
+                  <Text style={styles.clearTripText}>Limpiar</Text>
+                </Pressable>
+              )}
+            </View>
+
+            <View style={styles.searchGroup}>
+              <View style={styles.connector} />
+              <Pressable style={styles.locationField} onPress={() => openPicker('origin')}>
+                <View style={[styles.pointIcon, styles.originIcon]}>
+                  <Ionicons name="radio-button-on" size={14} color="#fff" />
+                </View>
+                <View style={styles.fieldText}>
+                  <Text style={styles.fieldLabel}>Origen</Text>
+                  <Text style={styles.fieldValue} numberOfLines={1}>
+                    {origin?.name ?? 'Selecciona tu punto de partida'}
+                  </Text>
+                </View>
+                <Pressable
+                  style={styles.currentButton}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    selectCurrentLocation('origin');
+                  }}
+                  accessibilityLabel="Usar mi ubicación actual como origen"
+                >
+                  <Ionicons name="locate-outline" size={20} color="#1f6feb" />
+                </Pressable>
+              </Pressable>
+
+              <Pressable
+                style={[styles.swapButton, (!origin || !destination) && styles.swapButtonDisabled]}
+                onPress={swapTripPoints}
+                disabled={!origin || !destination}
+                accessibilityLabel="Invertir origen y destino"
+              >
+                <Ionicons name="swap-vertical" size={18} color={origin && destination ? '#1f6feb' : '#94a3b8'} />
+              </Pressable>
+
+              <Pressable style={styles.locationField} onPress={() => openPicker('destination')}>
+                <View style={[styles.pointIcon, styles.destinationIcon]}>
+                  <Ionicons name="location" size={15} color="#fff" />
+                </View>
+                <View style={styles.fieldText}>
+                  <Text style={styles.fieldLabel}>Destino</Text>
+                  <Text style={styles.fieldValue} numberOfLines={1}>
+                    {destination?.name ?? '¿A dónde vas?'}
+                  </Text>
+                </View>
+                <Pressable
+                  style={styles.currentButton}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    selectCurrentLocation('destination');
+                  }}
+                  accessibilityLabel="Usar mi ubicación actual como destino"
+                >
+                  <Ionicons name="locate-outline" size={20} color="#dc2626" />
+                </Pressable>
+              </Pressable>
+            </View>
+
+            {location.positionError && <Pressable onPress={() => void location.locate()}><Text style={styles.mapHint}>{location.positionError} Toca para reintentar.</Text></Pressable>}
+            <Pressable onPress={() => setOptionsVisible(true)} accessibilityRole="button" style={styles.plannerOptions}>
+              <Ionicons name="options-outline" size={16} color="#1f6feb" />
+              <Text style={styles.plannerOptionsText}>Opciones · {preferenceLabels[preference]} · hasta {formatDistance(maxWalkingDistanceMeters)} a pie</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.searchButton, (!origin || !destination || plan.loading) && styles.searchButtonDisabled]}
+              disabled={!origin || !destination || plan.loading}
+              onPress={runSearch}
+              accessibilityRole="button"
+              accessibilityLabel="Buscar viajes"
+            >
+              {plan.loading ? <ActivityIndicator color="#fff" /> : <>
+                <Ionicons name="search" size={18} color="#fff" />
+                <Text style={styles.searchButtonText}>Buscar viajes</Text>
+              </>}
+            </Pressable>
+
+            {activeQuery && (plan.loading || plan.error || !itineraries.length) && (
+              <View style={styles.resultsStatus}>
+                {plan.loading ? <View style={styles.noRouteRow}><ActivityIndicator color="#1f6feb" /><Text style={styles.noRouteText}>Buscando caminatas, buses y conexiones…</Text></View>
+                  : plan.error ? <DataStatus error={plan.error} retry={plan.reload} />
+                  : <View style={styles.noRouteRow}><Ionicons name="information-circle-outline" size={22} color="#475569" /><Text style={styles.noRouteText}>{noJourneyMessage(plan.data?.meta.noRouteReason)}</Text></View>}
+              </View>
+            )}
+
+            {activeQuery && itineraries.length > 0 && (
+              <View style={styles.resultsSection}>
+                <View style={styles.routesHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.routesTitle}>Opciones de viaje</Text>
+                    <Text style={styles.routesSubtitle}>{USE_DUMMY_DATA ? 'Simulación · no usar para viajar' : 'Viaje completo de origen a destino'}</Text>
+                  </View>
+                  <Pressable style={styles.collapseButton} onPress={plan.reload} accessibilityLabel="Actualizar viajes"><Ionicons name="refresh" size={18} color="#475569" /></Pressable>
+                </View>
+                {itineraries.map(item => (
+                  <Pressable key={item.id} style={styles.routeCard}
+                    onPress={() => openRoute(item.id)} accessibilityRole="button"
+                    accessibilityLabel={`Ver viaje ${itineraryTitle(item)} en el mapa`}>
+                    <View style={[styles.routeStripe, { backgroundColor: itineraryColor(item) }]} />
+                    <View style={styles.routeCardContent}>
+                      <Text style={styles.routeName}>{itineraryTitle(item)}</Text>
+                      <Text style={styles.routeDescription}>{item.transfers === 0 ? 'Sin transbordos' : `${item.transfers} transbordo${item.transfers > 1 ? 's' : ''}`} · {formatDistance(item.walkingDistanceMeters)} a pie</Text>
+                      <Text style={[styles.routeDuration, { marginTop: 8 }]}>{itineraryDuration(item)}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </ScrollView>
+        </>
+      )}
+
+      {mapPickerTarget && (
+        <MapView
+          ref={mapRef}
+          onMapReady={() => setMapReady(true)}
+          provider={PROVIDER_GOOGLE}
+          style={StyleSheet.absoluteFill}
+          initialRegion={defaultRegion}
+          showsUserLocation={canInteract}
+          showsCompass
+          onPress={(event) => selectMapPoint(event.nativeEvent.coordinate)}
+        >
+          {mapPickerTarget === 'destination' && origin && <Marker coordinate={origin} title="Origen" pinColor="#1f6feb" />}
+          {mapPickerTarget === 'origin' && destination && <Marker coordinate={destination} title="Destino" pinColor="#dc2626" />}
+        </MapView>
+      )}
+
+      {mapPickerTarget && (
+        <>
+          <Pressable style={[styles.detailBackButton, { top: 16 + insets.top }]} onPress={() => setMapPickerTarget(null)}
+            accessibilityRole="button" accessibilityLabel="Cancelar selección en el mapa">
+            <Ionicons name="close" size={22} color="#111827" />
+          </Pressable>
+          <View style={[styles.mapPickerBanner, { top: 16 + insets.top }]}>
+            <Ionicons name="hand-left-outline" size={16} color="#1f6feb" />
+            <Text style={styles.mapPickerBannerText}>Toca el mapa para marcar tu {mapPickerTarget === 'origin' ? 'origen' : 'destino'}.</Text>
+          </View>
+        </>
+      )}
+
+      {viewingDetail && primaryItinerary && (
+        <MapView
+          ref={mapRef}
+          onMapReady={() => setMapReady(true)}
+          provider={PROVIDER_GOOGLE}
+          style={StyleSheet.absoluteFill}
+          initialRegion={defaultRegion}
+          showsUserLocation={canInteract}
+          showsCompass
+        >
+          <Marker coordinate={primaryItinerary.legs[0].from} title="Origen" description={primaryItinerary.legs[0].from.name} pinColor="#1f6feb" />
+          <Marker coordinate={primaryItinerary.legs[primaryItinerary.legs.length - 1].to} title="Destino" description={primaryItinerary.legs[primaryItinerary.legs.length - 1].to.name} pinColor="#dc2626" />
+          {busWaypoints.map((waypoint, index) => (
+            <Marker key={`waypoint-${index}-${waypoint.place.stopId ?? `${waypoint.place.latitude},${waypoint.place.longitude}`}`}
+              coordinate={waypoint.place} title={waypoint.entries.map(entry => entry.label).join(' · ')}
+              description={waypoint.place.name} pinColor={waypoint.entries.length > 1 ? '#0f766e' : waypoint.entries[0].color} />
+          ))}
+          {primaryItinerary.legs.map(leg => (
+            <Polyline key={`${primaryItinerary.id}:${leg.id}`} coordinates={leg.geometry.coordinates}
+              strokeColor={leg.mode === 'bus' ? leg.color : '#475569'}
+              strokeWidth={leg.mode === 'bus' ? 6 : 3}
+              lineDashPattern={leg.mode === 'walk' || leg.geometry.source === 'approximate' ? [4, 6] : undefined} />
+          ))}
+        </MapView>
+      )}
 
       {viewingDetail && primaryItinerary && (
         <Pressable style={[styles.detailBackButton, { top: 16 + insets.top }]} onPress={closeDetail}
@@ -301,152 +461,18 @@ export function TripScreen() {
         </Pressable>
       )}
 
-      <Pressable
-        style={[styles.locateButton, {
-          bottom: viewingDetail ? 16 + insets.bottom + sheetHeight(height, detailExpanded)
-            : (origin && destination) ? occupiedBottom + 12 : tabBarHeight + 16,
-        }]}
-        onPress={centerOnMe}
-        disabled={!mapReady || !canInteract || locating}
-        accessibilityRole="button"
-        accessibilityState={{ disabled: !mapReady || !canInteract || locating, busy: locating }}
-        accessibilityLabel="Centrar en mi ubicación"
-      >
-        {locating ? <ActivityIndicator color="#fff" /> : <Ionicons name="locate" size={24} color="#fff" />}
-      </Pressable>
-
-      {!viewingDetail && (
-      <View style={[styles.topPanel, { top: 16 + insets.top }]}>
-        <Text style={styles.eyebrow}>PLANEA TU VIAJE</Text>
-        <View style={styles.titleRow}>
-          <Text style={styles.title}>¿A dónde quieres ir?</Text>
-          {(origin || destination || selectedRouteId || searchText) && (
-            <Pressable
-              style={styles.clearTripButton}
-              onPress={clearTrip}
-              accessibilityLabel="Limpiar búsqueda"
-            >
-              <Ionicons name="refresh-outline" size={15} color="#dc2626" />
-              <Text style={styles.clearTripText}>Limpiar</Text>
-            </Pressable>
-          )}
-        </View>
-
-        <View style={styles.searchGroup}>
-          <View style={styles.connector} />
-          <Pressable style={styles.locationField} onPress={() => openPicker('origin')}>
-            <View style={[styles.pointIcon, styles.originIcon]}>
-              <Ionicons name="radio-button-on" size={14} color="#fff" />
-            </View>
-            <View style={styles.fieldText}>
-              <Text style={styles.fieldLabel}>Origen</Text>
-              <Text style={styles.fieldValue} numberOfLines={1}>
-                {origin?.name ?? 'Selecciona tu punto de partida'}
-              </Text>
-            </View>
-            <Pressable
-              style={styles.currentButton}
-              onPress={(event) => {
-                event.stopPropagation();
-                selectCurrentLocation('origin');
-              }}
-              accessibilityLabel="Usar mi ubicación actual como origen"
-            >
-              <Ionicons name="locate-outline" size={20} color="#1f6feb" />
-            </Pressable>
-          </Pressable>
-
-          <Pressable
-            style={[styles.swapButton, (!origin || !destination) && styles.swapButtonDisabled]}
-            onPress={swapTripPoints}
-            disabled={!origin || !destination}
-            accessibilityLabel="Invertir origen y destino"
-          >
-            <Ionicons name="swap-vertical" size={18} color={origin && destination ? '#1f6feb' : '#94a3b8'} />
-          </Pressable>
-
-          <Pressable style={styles.locationField} onPress={() => openPicker('destination')}>
-            <View style={[styles.pointIcon, styles.destinationIcon]}>
-              <Ionicons name="location" size={15} color="#fff" />
-            </View>
-            <View style={styles.fieldText}>
-              <Text style={styles.fieldLabel}>Destino</Text>
-              <Text style={styles.fieldValue} numberOfLines={1}>
-                {destination?.name ?? '¿A dónde vas?'}
-              </Text>
-            </View>
-            <Pressable
-              style={styles.currentButton}
-              onPress={(event) => {
-                event.stopPropagation();
-                selectCurrentLocation('destination');
-              }}
-              accessibilityLabel="Usar mi ubicación actual como destino"
-            >
-              <Ionicons name="locate-outline" size={20} color="#dc2626" />
-            </Pressable>
-          </Pressable>
-        </View>
-
-        {location.positionError && <Pressable onPress={() => void location.locate()}><Text style={styles.mapHint}>{location.positionError} Toca para reintentar.</Text></Pressable>}
-        <Pressable onPress={() => setOptionsVisible(true)} accessibilityRole="button" style={styles.plannerOptions}>
-          <Ionicons name="options-outline" size={16} color="#1f6feb" />
-          <Text style={styles.plannerOptionsText}>Opciones · {preferenceLabels[preference]} · hasta {formatDistance(maxWalkingDistanceMeters)} a pie</Text>
-        </Pressable>
-        {mapPickerTarget && (
-          <Pressable style={styles.mapPickerHint} onPress={() => setMapPickerTarget(null)}>
-            <Ionicons name="hand-left-outline" size={14} color="#1f6feb" />
-            <Text style={styles.mapPickerHintText}>
-              Toca el mapa para marcar tu {mapPickerTarget === 'origin' ? 'origen' : 'destino'}.
-            </Text>
-            <Ionicons name="close-circle" size={16} color="#94a3b8" />
-          </Pressable>
-        )}
-      </View>
-      )}
-
-      {!viewingDetail && origin && destination && (plan.loading || plan.error || !itineraries.length) && (
-        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}
-          onLayout={event => setOccupiedBottom(92 + insets.bottom + event.nativeEvent.layout.height)}>
-          {plan.loading ? <View style={styles.noRouteRow}><ActivityIndicator color="#1f6feb" /><Text style={styles.noRouteText}>Buscando caminatas, buses y conexiones…</Text></View>
-            : plan.error ? <DataStatus error={plan.error} retry={plan.reload} />
-            : <View style={styles.noRouteRow}><Ionicons name="information-circle-outline" size={22} color="#475569" /><Text style={styles.noRouteText}>{noJourneyMessage(plan.data?.meta.noRouteReason)}</Text></View>}
-        </View>
-      )}
-
-      {!viewingDetail && primaryItinerary && !routesCollapsed && (
-        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}
-          onLayout={event => setOccupiedBottom(92 + insets.bottom + event.nativeEvent.layout.height)}>
-          <View style={styles.routesHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.routesTitle}>Opciones de viaje</Text>
-              <Text style={styles.routesSubtitle}>{USE_DUMMY_DATA ? 'Simulación · no usar para viajar' : 'Viaje completo de origen a destino'}</Text>
-            </View>
-            <Pressable style={styles.collapseButton} onPress={plan.reload} accessibilityLabel="Actualizar viajes para salir ahora"><Ionicons name="refresh" size={18} color="#475569" /></Pressable>
-            <Pressable style={styles.collapseButton} onPress={() => setRoutesCollapsed(true)} accessibilityLabel="Ocultar viajes"><Ionicons name="chevron-down" size={19} color="#475569" /></Pressable>
-          </View>
-          <FlatList data={itineraries} keyExtractor={item => item.id} horizontal showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.routeList} renderItem={({ item }) => (
-              <Pressable style={[styles.routeCard, primaryItinerary.id === item.id && styles.routeCardSelected]}
-                onPress={() => { setSelectedRouteId(item.id); setDetailExpanded(false); setViewingDetail(true); }} accessibilityRole="button"
-                accessibilityState={{ selected: primaryItinerary.id === item.id }} accessibilityLabel={`Ver viaje ${itineraryTitle(item)} en el mapa`}>
-                <View style={[styles.routeStripe, { backgroundColor: itineraryColor(item) }]} />
-                <View style={styles.routeCardContent}>
-                  <Text style={styles.routeName}>{itineraryTitle(item)}</Text>
-                  <Text style={styles.routeDescription}>{item.transfers === 0 ? 'Sin transbordos' : `${item.transfers} transbordo${item.transfers > 1 ? 's' : ''}`} · {formatDistance(item.walkingDistanceMeters)} a pie</Text>
-                  <Text style={[styles.routeDuration, { marginTop: 8 }]}>{itineraryDuration(item)}</Text>
-                </View>
-              </Pressable>
-            )} />
-        </View>
-      )}
-      {!viewingDetail && primaryItinerary && routesCollapsed && (
-        <Pressable style={[styles.collapsedRoutesTab, { bottom: 98 + insets.bottom }]}
-          onLayout={event => setOccupiedBottom(98 + insets.bottom + event.nativeEvent.layout.height)}
-          onPress={() => setRoutesCollapsed(false)} accessibilityLabel="Mostrar viajes">
-          <Ionicons name="map-outline" size={18} color="#1f6feb" />
-          <Text style={styles.collapsedRoutesText}>Mostrar {itineraries.length} opciones de viaje</Text>
-          <Ionicons name="chevron-up" size={18} color="#64748b" />
+      {showingMap && (
+        <Pressable
+          style={[styles.locateButton, {
+            bottom: viewingDetail ? 16 + insets.bottom + sheetHeight(height, detailExpanded) : insets.bottom + 16,
+          }]}
+          onPress={centerOnMe}
+          disabled={!mapReady || !canInteract || locating}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !mapReady || !canInteract || locating, busy: locating }}
+          accessibilityLabel="Centrar en mi ubicación"
+        >
+          {locating ? <ActivityIndicator color="#fff" /> : <Ionicons name="locate" size={24} color="#fff" />}
         </Pressable>
       )}
 
@@ -458,6 +484,7 @@ export function TripScreen() {
           onExpand={setDetailExpanded}
           onBack={closeDetail}
           showBackButton={false}
+          bottomOffset={0}
           onClear={clearTrip}
         >
           <Text style={styles.stopListTitle}>Paso a paso</Text>
@@ -509,23 +536,23 @@ export function TripScreen() {
           </View>
           <Text style={styles.stopListTitle}>Prefiero</Text>
           <View style={styles.optionRow}>{(Object.keys(preferenceLabels) as JourneyPreference[]).map(value => (
-            <Pressable key={value} onPress={() => { setPreference(value); setSelectedRouteId(null); }} style={[styles.optionChip, preference === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: preference === value }}>
+            <Pressable key={value} onPress={() => { setPreference(value); setSelectedRouteId(null); setActiveQuery(null); }} style={[styles.optionChip, preference === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: preference === value }}>
               <Text style={styles.plannerOptionsText}>{preferenceLabels[value]}</Text>
             </Pressable>
           ))}</View>
           <Text style={styles.stopListTitle}>Caminata máxima total (incluye transbordos)</Text>
           <View style={styles.optionRow}>{[500, 1000, 1500, 2500].map(value => (
-            <Pressable key={value} onPress={() => { setMaxWalkingDistanceMeters(value); setSelectedRouteId(null); }} style={[styles.optionChip, maxWalkingDistanceMeters === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: maxWalkingDistanceMeters === value }}>
+            <Pressable key={value} onPress={() => { setMaxWalkingDistanceMeters(value); setSelectedRouteId(null); setActiveQuery(null); }} style={[styles.optionChip, maxWalkingDistanceMeters === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: maxWalkingDistanceMeters === value }}>
               <Text style={styles.plannerOptionsText}>{formatDistance(value)}</Text>
             </Pressable>
           ))}</View>
           <Text style={styles.stopListTitle}>Máximo de transbordos</Text>
           <View style={styles.optionRow}>{[0, 1, 2].map(value => (
-            <Pressable key={value} onPress={() => { setMaxTransfers(value); setSelectedRouteId(null); }} style={[styles.optionChip, maxTransfers === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: maxTransfers === value }}>
+            <Pressable key={value} onPress={() => { setMaxTransfers(value); setSelectedRouteId(null); setActiveQuery(null); }} style={[styles.optionChip, maxTransfers === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: maxTransfers === value }}>
               <Text style={styles.plannerOptionsText}>{value === 0 ? 'Sin transbordos' : value}</Text>
             </Pressable>
           ))}</View>
-          <Pressable style={styles.mapPickerItem} onPress={() => { setOptionsVisible(false); setRoutesCollapsed(false); }} accessibilityRole="button"><Text style={styles.plannerOptionsText}>Ver viajes</Text></Pressable>
+          <Pressable style={styles.mapPickerItem} onPress={() => setOptionsVisible(false)} accessibilityRole="button"><Text style={styles.plannerOptionsText}>Listo</Text></Pressable>
         </View>
       </Modal>
 
@@ -612,20 +639,11 @@ const styles = StyleSheet.create({
   optionChipSelected: { backgroundColor: '#dbeafe', borderColor: '#1f6feb' },
   container: {
     flex: 1,
-    backgroundColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
   },
-  topPanel: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    backgroundColor: 'rgba(255,255,255,0.97)',
-    borderRadius: 20,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.14,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
+  formContent: {
+    padding: 20,
+    paddingTop: 24,
   },
   detailBackButton: {
     position: 'absolute',
@@ -642,6 +660,30 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
     elevation: 8,
+  },
+  mapPickerBanner: {
+    position: 'absolute',
+    left: 68,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 8,
+  },
+  mapPickerBannerText: {
+    flex: 1,
+    color: '#1f6feb',
+    fontSize: 12,
+    fontWeight: '700',
   },
   locateButton: {
     position: 'absolute',
@@ -670,12 +712,11 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     marginTop: 4,
-    flex: 1,
   },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 18,
   },
   clearTripButton: {
     flexDirection: 'row',
@@ -693,19 +734,24 @@ const styles = StyleSheet.create({
   searchGroup: {
     position: 'relative',
     gap: 8,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   connector: {
     position: 'absolute',
-    left: 16,
-    top: 28,
-    bottom: 28,
+    left: 32,
+    top: 44,
+    bottom: 44,
     width: 1,
     backgroundColor: '#cbd5e1',
   },
   swapButton: {
     position: 'absolute',
-    right: 12,
-    top: 48,
+    right: 28,
+    top: 64,
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -776,41 +822,36 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 12,
   },
-  mapPickerHint: {
+  searchButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
-    marginTop: 12,
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: '#eff6ff',
+    minHeight: 52,
+    borderRadius: 14,
+    backgroundColor: '#1f6feb',
+    marginTop: 18,
   },
-  mapPickerHintText: {
-    flex: 1,
-    color: '#1f6feb',
-    fontSize: 12,
-    fontWeight: '700',
+  searchButtonDisabled: {
+    opacity: 0.45,
   },
-  routesPanel: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(248,250,252,0.97)',
-    paddingTop: 14,
-    paddingBottom: 12,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: -3 },
-    elevation: 8,
+  searchButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  resultsStatus: {
+    marginTop: 20,
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 16,
   },
   noRouteRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: 18,
   },
   noRouteText: {
     flex: 1,
@@ -818,12 +859,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
   },
+  resultsSection: {
+    marginTop: 24,
+  },
   routesHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    marginBottom: 10,
+    marginBottom: 12,
   },
   routesTitle: {
     color: '#111827',
@@ -844,53 +887,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 8,
   },
-  routeList: {
-    paddingHorizontal: 18,
-    gap: 12,
-  },
   routeCard: {
-    width: 264,
-    minHeight: 126,
     flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-  },
-  routeCardSelected: {
-    borderColor: '#1f6feb',
-    borderWidth: 2,
-  },
-  collapsedRoutesTab: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    minHeight: 50,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.98)',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 8,
-  },
-  collapsedRoutesText: {
-    flex: 1,
-    color: '#334155',
-    fontSize: 13,
-    fontWeight: '800',
-    marginLeft: 9,
+    marginBottom: 12,
+    paddingRight: 12,
   },
   routeStripe: {
     width: 5,
+    alignSelf: 'stretch',
   },
   routeCardContent: {
     flex: 1,
-    padding: 12,
+    padding: 14,
   },
   routeName: {
     color: '#111827',

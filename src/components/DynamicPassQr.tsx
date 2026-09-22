@@ -16,5 +16,5 @@ export function DynamicPassQr({ pass }: { pass: PurchasedPass }) {
   void start();const subscription=AppState.addEventListener('change',state=>{generation++;clear();if(state==='active')void start();});
   return()=>{active=false;generation++;if(timer)clearInterval(timer);subscription.remove();};
  },[pass.id]);
- return <View style={{alignItems:'center',backgroundColor:'white',padding:20,marginTop:16,borderRadius:16}}>{qr?<QRCode value={qr} size={240}/>:<Text>{error??'Preparando QR…'}</Text>}<Text style={{marginTop:12,color:'#475569'}}>Se renueva cada 15 segundos. Presenta el QR desde este teléfono.</Text></View>;
+ return <View style={{alignItems:'center',backgroundColor:'white',padding:20,marginTop:16,borderRadius:16}}>{qr?<><QRCode value={qr} size={240}/><Text style={{marginTop:12,color:'#475569'}}>Se renueva cada 15 segundos. Presenta el QR desde este teléfono.</Text></>:<Text>{error??'Preparando QR…'}</Text>}</View>;
 }

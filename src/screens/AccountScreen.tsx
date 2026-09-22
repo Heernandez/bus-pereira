@@ -5,17 +5,19 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSession } from '../context/Session';
+import { StatusBarSpacer } from '../components/StatusBarSpacer';
 
 export function AccountScreen() {
   const onViewLayout = useViewTiming('Cuenta', useIsFocused());
   const insets = useSafeAreaInsets();
   const { account, busy, isConfigured, restoreError, restoreSession, signIn, signOut } = useSession();
   return (
+    <View style={styles.container}>
+    <StatusBarSpacer />
     <ScrollView onLayout={onViewLayout}
-      style={styles.container}
       contentContainerStyle={[
         styles.content,
-        { paddingTop: 28 + insets.top, paddingBottom: 104 + insets.bottom },
+        { paddingBottom: 104 + insets.bottom },
       ]}
     >
       <Text style={styles.eyebrow}>TU CUENTA</Text>
@@ -94,6 +96,7 @@ export function AccountScreen() {
         </View>
       </View>
     </ScrollView>
+    </View>
   );
 }
 

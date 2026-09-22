@@ -14,6 +14,7 @@ import { useRemoteData } from '../hooks/useRemoteData';
 import { DataStatus } from '../components/DataStatus';
 import { getProducts, USE_DUMMY_DATA } from '../services/transit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBarSpacer } from '../components/StatusBarSpacer';
 
 type PassType = string;
 
@@ -104,10 +105,11 @@ export function PassScreen() {
 
   return (
     <View style={styles.container} onLayout={onViewLayout}>
+      <StatusBarSpacer />
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingTop: 28 + insets.top, paddingBottom: 104 + insets.bottom },
+          { paddingBottom: 104 + insets.bottom },
         ]}
       >
         <Text style={styles.eyebrow}>MOVILIDAD DIGITAL</Text>
