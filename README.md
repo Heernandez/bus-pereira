@@ -2,6 +2,10 @@
 
 Aplicación móvil para consultar rutas, paradas y experiencia de viaje en Pereira, construida con React Native + Expo.
 
+La pantalla Viaje consume itinerarios completos del backend: caminatas, buses y transbordos.
+Ver [contrato del planificador](docs/journey-planning.md) y [prompt para implementar el backend](docs/backend-journey-planner-prompt.md).
+En modo API requiere `POST /journeys/plan`; en modo dummy utiliza únicamente una simulación local.
+
 ## Requisitos
 
 Antes de empezar, asegúrate de tener instalado:

@@ -2,9 +2,11 @@ import { API_URL, request, USE_DUMMY_DATA } from './transit';
 
 export type Campaign = { id: string; imageUrl: string; durationSeconds: number; accessibilityLabel: string; maxViewsPerDevice: number };
 export type PurchasedPass = {
-  id: string; productId: 'round_trip' | '7_days' | '28_days'; name: string; description: string;
+  id: string; productId: string; name: string; description: string;
   price: number; currency: 'COP'; purchasedAt: string; expiresAt: string | null;
-  remainingUses: number | null; status: 'active' | 'expired';
+  remainingUses: number | null; status: 'pending_activation' | 'activation_expired' | 'active' | 'expired';
+  activatedAt?: string | null; activateBefore?: string | null; validityDays?: number | null; activationWindowSeconds?: number | null; paymentMethod?: string;
+  installationId?: string; paymentMode?: string; paymentStatus?: string;
 };
 export function parseCampaign(value: unknown): Campaign | null {
   if (value === null) return null;
@@ -44,7 +46,7 @@ export async function getMyPasses(token: string, signal: AbortSignal): Promise<P
   const response = await request<{ data: { passes: PurchasedPass[] } }>('/me/passes', signal, { Authorization: `Bearer ${token}` });
   if (!Array.isArray(response.data.passes) || response.data.passes.some(pass =>
     !pass || typeof pass.id !== 'string' || typeof pass.name !== 'string' || typeof pass.description !== 'string' ||
-    !['round_trip', '7_days', '28_days'].includes(pass.productId) || !['active', 'expired'].includes(pass.status) ||
+    typeof pass.productId !== 'string' || !['pending_activation', 'activation_expired', 'active', 'expired'].includes(pass.status) ||
     pass.currency !== 'COP' || !Number.isFinite(pass.price) || !Number.isFinite(Date.parse(pass.purchasedAt)) ||
     (pass.expiresAt !== null && !Number.isFinite(Date.parse(pass.expiresAt))) ||
     (pass.remainingUses !== null && (!Number.isInteger(pass.remainingUses) || pass.remainingUses < 0)))) {

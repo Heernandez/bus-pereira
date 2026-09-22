@@ -5,9 +5,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export const sheetHeight = (height: number, expanded: boolean) => expanded ? Math.min(440, height * 0.55) : 98;
 
-export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, onClear, children }: {
+export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, showBackButton = true, onClear, children }: {
   title: string; subtitle: string; expanded: boolean; onExpand: (expanded: boolean) => void;
-  onBack: () => void; onClear: () => void; children: React.ReactNode;
+  onBack: () => void; showBackButton?: boolean; onClear: () => void; children: React.ReactNode;
 }) {
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -26,7 +26,7 @@ export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, on
   return <Animated.View style={[styles.sheet, { bottom: 86 + insets.bottom, height: size }]}>
     <View {...gesture.panHandlers}><Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Minimizar detalle' : 'Expandir detalle'} onPress={() => onExpand(!expanded)} style={styles.handleArea}><View style={styles.handle} /></Pressable></View>
     <View style={styles.header}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Volver a la selección anterior" onPress={onBack} style={styles.control}><Ionicons name="arrow-back" size={22} color="#1f6feb" /></Pressable>
+      {showBackButton && <Pressable accessibilityRole="button" accessibilityLabel="Volver a la selección anterior" onPress={onBack} style={styles.control}><Ionicons name="arrow-back" size={22} color="#1f6feb" /></Pressable>}
       <Pressable style={styles.heading} onPress={() => onExpand(!expanded)} accessibilityRole="button" accessibilityLabel={`${title}. ${expanded ? 'Minimizar' : 'Expandir'}`}>
         <Text style={styles.title} numberOfLines={1}>{title}</Text><Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
       </Pressable>

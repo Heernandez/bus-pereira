@@ -1,3 +1,4 @@
+import { loadPasses, savePasses } from '../services/passWallet';
 import { startupLog, startupSpan } from '../services/startupTiming';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
@@ -91,9 +92,12 @@ export function OpeningProvider({ children, renderOpening }: { children: React.R
         catch (error) { tokenDone('error'); throw error; }
         if (controller.signal.aborted) return;
         const passes = await getMyPasses(token, controller.signal);
-        if (!controller.signal.aborted) setState({ owner, passes, error: null });
+        if (!controller.signal.aborted) { await savePasses(owner,passes); setState({ owner, passes, error: null }); }
       } catch {
-        if (!controller.signal.aborted) setState({ owner, passes: null, error: 'No pudimos consultar tus pasabordos. Intenta nuevamente.' });
+        if (!controller.signal.aborted) {
+          const cached=await loadPasses(owner).catch(()=>[]);
+          if (!controller.signal.aborted) setState({owner,passes:cached.length?cached:null,error:'No pudimos actualizar tus pasabordos. Intenta nuevamente.'});
+        }
       }
     })();
     return () => controller.abort();

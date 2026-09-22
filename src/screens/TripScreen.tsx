@@ -1,7 +1,10 @@
 import { useViewTiming } from '../hooks/useViewTiming';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BackHandler,
   FlatList,
+  ActivityIndicator,
+  useWindowDimensions,
   Keyboard,
   Modal,
   Platform,
@@ -13,52 +16,37 @@ import {
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
+import { useBottomTabBarHeight, type BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useLocationAccess } from '../context/LocationAccess';
 import { LocationGate } from '../components/LocationGate';
 import { DataStatus } from '../components/DataStatus';
+import { MapDetailSheet, sheetHeight } from '../components/map/MapDetailSheet';
 import { useRemoteData } from '../hooks/useRemoteData';
 import { getCatalog, USE_DUMMY_DATA } from '../services/transit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useWalkingRoute } from '../hooks/useWalkingRoute';
-import type { WalkingRoute } from '../services/walkingDirections';
-
-import {
-  findDirectVariant,
-  getNearestStops,
-  getVariantCoordinates,
-  hasDirectRoute,
-  sliceRouteSegment,
-  type Location,
-} from '../data/catalog';
+import { useJourneyPlan } from '../hooks/useJourneyPlan';
+import { formatDistance, formatDuration, itineraryTitle, itineraryColor, itineraryDuration, journeyTimeline, walkStepLabel, busWaitLabel, noJourneyMessage } from '../services/journeyPresentation';
+import { getTabBarStyle } from '../navigation/tabBar';
+import type { JourneyPreference } from '../types/journey';
+import type { Location } from '../data/catalog';
 
 type Point = Location & { isCurrent?: boolean };
-
-const isTransitPoint = (point: Point) => point.type === 'stop' || point.type === 'station';
-
-const formatWalkingSummary = (route: WalkingRoute) => {
-  const meters = Math.round(route.distanceMeters);
-  const distance = meters < 1000 ? `${meters} m` : `${(meters / 1000).toFixed(1)} km`;
-  const minutes = Math.max(1, Math.ceil(route.durationSeconds / 60));
-  return `${distance} · ${minutes} min`;
-};
-
-const hexToRgba = (hex: string, alpha: number) => {
-  const value = hex.replace('#', '');
-  const r = parseInt(value.slice(0, 2), 16);
-  const g = parseInt(value.slice(2, 4), 16);
-  const b = parseInt(value.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+const journeyPoint = (point: Point) => ({ latitude: point.latitude, longitude: point.longitude,
+  ...(point.type === 'stop' || point.type === 'station' ? { stopId: point.id } : {}) });
+const preferenceLabels: Record<JourneyPreference, string> = {
+  fastest: 'Más rápido', least_walking: 'Menos caminata', fewest_transfers: 'Menos transbordos',
 };
 
 export function TripScreen() {
   const insets = useSafeAreaInsets();
   const focused = useIsFocused();
   const onViewLayout = useViewTiming('Viaje', focused);
+  const navigation = useNavigation<BottomTabNavigationProp<{ Viaje: undefined }>>();
   const location = useLocationAccess();
   const catalog = useRemoteData(getCatalog);
   const stopsCatalog = catalog.data?.stops ?? [];
-  const routeOptions = catalog.data?.routes ?? [];
+
   const canInteract = location.state === 'ready' && focused;
   useEffect(() => { if (focused) void location.refresh(); }, [focused, location.refresh]);
   const [origin, setOrigin] = useState<Point | null>(null);
@@ -68,10 +56,81 @@ export function TripScreen() {
   const [searchText, setSearchText] = useState('');
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [routesCollapsed, setRoutesCollapsed] = useState(false);
+  const [viewingDetail, setViewingDetail] = useState(false);
+  const [detailExpanded, setDetailExpanded] = useState(false);
+  const closeDetail = () => { setViewingDetail(false); setDetailExpanded(false); };
   const [mapPickerTarget, setMapPickerTarget] = useState<'origin' | 'destination' | null>(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [preference, setPreference] = useState<JourneyPreference>('fastest');
+  const [maxWalkingDistanceMeters, setMaxWalkingDistanceMeters] = useState(1500);
+  const [maxTransfers, setMaxTransfers] = useState(2);
+  const [optionsVisible, setOptionsVisible] = useState(false);
+  const mapRef = useRef<MapView>(null);
+  const [mapReady, setMapReady] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const locatingRef = useRef(false);
+  const screenActive = useRef(false);
+  screenActive.current = canInteract;
+  useEffect(() => () => { screenActive.current = false; }, []);
+  const [occupiedBottom, setOccupiedBottom] = useState(0);
+  useEffect(() => { if (!origin || !destination) setOccupiedBottom(0); }, [origin, destination]);
+  const tabBarHeight = useBottomTabBarHeight();
+  const { height } = useWindowDimensions();
+  const query = useMemo(() => origin && destination ? {
+    origin: journeyPoint(origin), destination: journeyPoint(destination),
+    preferences: { optimize: preference, maxWalkingDistanceMeters, maxTransfers },
+  } : null, [origin, destination, preference, maxWalkingDistanceMeters, maxTransfers]);
+  const plan = useJourneyPlan(query);
+  const itineraries = plan.data?.data.itineraries ?? [];
+  const primaryItinerary = itineraries.find(item => item.id === selectedRouteId) ?? itineraries[0] ?? null;
+  const busWaypoints = useMemo(() => {
+    if (!primaryItinerary) return [];
+    const busLegs = primaryItinerary.legs.filter(leg => leg.mode === 'bus');
+    if (!busLegs.length) return [];
+    const originPlace = primaryItinerary.legs[0].from;
+    const destinationPlace = primaryItinerary.legs[primaryItinerary.legs.length - 1].to;
+    // Bus legs always carry stopId; comparing by it avoids re-deriving a distance check
+    // for the common case, and still catches origin/destination as free coordinates.
+    const sameSpot = (a: { latitude: number; longitude: number; stopId?: string }, b: { latitude: number; longitude: number; stopId?: string }) =>
+      a.stopId && b.stopId ? a.stopId === b.stopId
+        : Math.abs(a.latitude - b.latitude) < 0.0001 && Math.abs(a.longitude - b.longitude) < 0.0001;
+    const waypoints: { place: typeof originPlace; entries: { label: string; color: string }[] }[] = [];
+    for (const leg of busLegs) {
+      for (const [verb, place] of [['Sube al', leg.from], ['Baja del', leg.to]] as const) {
+        if (sameSpot(place, originPlace) || sameSpot(place, destinationPlace)) continue;
+        const entry = { label: `${verb} ${leg.routeCode}`, color: leg.color };
+        const existing = waypoints.find(w => sameSpot(w.place, place));
+        if (existing) existing.entries.push(entry); else waypoints.push({ place, entries: [entry] });
+      }
+    }
+    return waypoints;
+  }, [primaryItinerary]);
+  const timeline = useMemo(() => primaryItinerary ? journeyTimeline(primaryItinerary) : [], [primaryItinerary]);
+  useEffect(() => {
+    if (!mapReady || !primaryItinerary) return;
+    const top = viewingDetail ? 24 + insets.top : Math.min(height * 0.32, 290);
+    const bottom = viewingDetail ? 24 + insets.bottom + sheetHeight(height, detailExpanded) : Math.min(height * 0.36, 320);
+    mapRef.current?.fitToCoordinates(primaryItinerary.legs.flatMap(leg => leg.geometry.coordinates), {
+      edgePadding: { top, bottom, left: 45, right: 45 }, animated: true,
+    });
+  }, [primaryItinerary, mapReady, height, viewingDetail, detailExpanded, insets.top, insets.bottom]);
 
-  useEffect(() => { if (!canInteract) { setPickerVisible(false); setMapPickerTarget(null); } }, [canInteract]);
+  // Give the full screen to the route graphic while its own back button is visible;
+  // the parent Tab.Navigator reads this option back from us.
+  useEffect(() => {
+    navigation.setOptions({ tabBarStyle: viewingDetail ? { display: 'none' } : getTabBarStyle(insets.bottom) });
+  }, [navigation, viewingDetail, insets.bottom]);
+
+  useEffect(() => {
+    if (!viewingDetail) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (detailExpanded) setDetailExpanded(false); else closeDetail();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [viewingDetail, detailExpanded]);
+
+  useEffect(() => { if (!canInteract) { setPickerVisible(false); setMapPickerTarget(null); setOptionsVisible(false); } }, [canInteract]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -94,72 +153,11 @@ export function TripScreen() {
     );
   }, [searchText, catalog.data]);
 
-  const connectionStations = useMemo(() => {
-    if (!origin || !destination) return null;
-    const originCandidates = isTransitPoint(origin) ? [origin] : getNearestStops(origin, stopsCatalog);
-    const destinationCandidates = isTransitPoint(destination) ? [destination] : getNearestStops(destination, stopsCatalog);
-    if (!originCandidates.length || !destinationCandidates.length) return null;
-    if (!USE_DUMMY_DATA) {
-      for (const originStation of originCandidates) {
-        for (const destinationStation of destinationCandidates) {
-          if (hasDirectRoute(routeOptions, originStation.id, destinationStation.id)) {
-            return { originStation, destinationStation };
-          }
-        }
-      }
-    }
-    // No candidate pair connects directly (or dummy mode, which doesn't check reachability):
-    // fall back to the closest pair so markers/labels still show something sensible.
-    return { originStation: originCandidates[0], destinationStation: destinationCandidates[0] };
-  }, [origin, destination, catalog.data]);
-
-  const routeLines = useMemo(() => {
-    if (!origin || !destination || !connectionStations) {
-      return [];
-    }
-
-    const { originStation, destinationStation } = connectionStations;
-    return routeOptions.flatMap((route) => {
-      const variant = USE_DUMMY_DATA ? route.variants[0] : findDirectVariant(route, originStation.id, destinationStation.id);
-      if (!variant) return [];
-      const sequenceCoordinates = getVariantCoordinates(variant, stopsCatalog);
-      const from = variant.stopSequence.indexOf(originStation.id);
-      const to = variant.stopSequence.indexOf(destinationStation.id, from + 1);
-      const stopSegment = from >= 0 && to > from ? variant.stopSequence.slice(from, to + 1) : variant.stopSequence;
-      const stopNames = stopSegment.map(id => stopsCatalog.find(stop => stop.id === id)?.name ?? 'Estación sin información');
-      const stopCoordinates = variant.stopSequence.map(id => stopsCatalog.find(stop => stop.id === id));
-
-      return {
-        ...route,
-        stopNames,
-        // Only the boarding→alighting stretch the passenger actually rides, never the full terminal-to-terminal shape.
-        transitCoordinates: from >= 0 && to > from
-          ? sliceRouteSegment(sequenceCoordinates, stopCoordinates, from, to)
-          : [originStation, destinationStation],
-      };
-    });
-  }, [destination, origin, catalog.data, connectionStations]);
-
-  const visibleRoutes = selectedRouteId
-    ? routeLines.filter((route) => route.id === selectedRouteId)
-    : routeLines;
-
-  const primaryRouteId = selectedRouteId ?? routeLines[0]?.id ?? null;
-  const primaryRoute = routeLines.find((route) => route.id === primaryRouteId) ?? null;
-
-  const originWalk = useWalkingRoute(
-    origin && connectionStations && !isTransitPoint(origin) ? origin : null,
-    connectionStations?.originStation ?? null,
-  );
-  const destinationWalk = useWalkingRoute(
-    connectionStations?.destinationStation ?? null,
-    destination && connectionStations && !isTransitPoint(destination) ? destination : null,
-  );
-
   const selectPoint = (point: Point, mode = selectionMode) => {
     if (!canInteract) return;
     setSelectedRouteId(null);
     setRoutesCollapsed(false);
+    closeDetail();
 
     if (mode === 'origin') {
       setOrigin(point);
@@ -209,6 +207,7 @@ export function TripScreen() {
     setDestination(null);
     setSelectedRouteId(null);
     setRoutesCollapsed(false);
+    closeDetail();
     setSearchText('');
     setPickerVisible(false);
     setSelectionMode('origin');
@@ -224,9 +223,28 @@ export function TripScreen() {
     setDestination(origin);
     setSelectedRouteId(null);
     setRoutesCollapsed(false);
+    closeDetail();
     setSearchText('');
     setPickerVisible(false);
     setMapPickerTarget(null);
+  };
+
+  const centerOnMe = async () => {
+    if (!mapReady || !canInteract || locatingRef.current) return;
+    locatingRef.current = true;
+    setLocating(true);
+    const focus = (point: { latitude: number; longitude: number }) => {
+      if (!screenActive.current) return;
+      mapRef.current?.setCamera({ center: point, zoom: 16, pitch: 0, heading: 0 });
+    };
+    if (location.coordinate) focus(location.coordinate);
+    try {
+      const point = await location.locate();
+      if (point) focus(point);
+    } finally {
+      locatingRef.current = false;
+      if (screenActive.current) setLocating(false);
+    }
   };
 
   if (!catalog.data) return <LocationGate><View onLayout={onViewLayout} style={[styles.container, { justifyContent: 'center' }]}><DataStatus error={catalog.error} retry={catalog.reload} /></View></LocationGate>;
@@ -234,6 +252,8 @@ export function TripScreen() {
   return (
     <LocationGate><View onLayout={onViewLayout} style={styles.container}>
       <MapView
+        ref={mapRef}
+        onMapReady={() => setMapReady(true)}
         provider={PROVIDER_GOOGLE}
         style={StyleSheet.absoluteFill}
         initialRegion={defaultRegion}
@@ -261,54 +281,41 @@ export function TripScreen() {
             pinColor="#dc2626"
           />
         )}
-        {connectionStations?.originStation && origin && !isTransitPoint(origin) && (
-          <Marker
-            coordinate={connectionStations.originStation}
-            title="Estación de conexión de origen"
-            description={connectionStations.originStation.name}
-            pinColor="#475569"
-          />
-        )}
-        {connectionStations?.destinationStation && destination && !isTransitPoint(destination) && (
-          <Marker
-            coordinate={connectionStations.destinationStation}
-            title="Estación de conexión de destino"
-            description={connectionStations.destinationStation.name}
-            pinColor="#475569"
-          />
-        )}
-        {visibleRoutes.map((route) => {
-          const isPrimary = route.id === primaryRouteId;
-          return (
-            <Polyline
-              key={route.id}
-              coordinates={route.transitCoordinates}
-              strokeColor={isPrimary ? route.color : hexToRgba(route.color, 0.45)}
-              strokeWidth={isPrimary ? 6 : 3}
-              zIndex={isPrimary ? 2 : 1}
-            />
-          );
-        })}
-        {originWalk.route && (
-          <Polyline
-            key="walk-origin"
-            coordinates={originWalk.route.coordinates}
-            strokeColor="#475569"
-            strokeWidth={3}
-            lineDashPattern={[4, 6]}
-          />
-        )}
-        {destinationWalk.route && (
-          <Polyline
-            key="walk-destination"
-            coordinates={destinationWalk.route.coordinates}
-            strokeColor="#475569"
-            strokeWidth={3}
-            lineDashPattern={[4, 6]}
-          />
-        )}
+        {busWaypoints.map((waypoint, index) => (
+          <Marker key={`waypoint-${index}-${waypoint.place.stopId ?? `${waypoint.place.latitude},${waypoint.place.longitude}`}`}
+            coordinate={waypoint.place} title={waypoint.entries.map(entry => entry.label).join(' · ')}
+            description={waypoint.place.name} pinColor={waypoint.entries.length > 1 ? '#0f766e' : waypoint.entries[0].color} />
+        ))}
+        {primaryItinerary?.legs.map(leg => (
+          <Polyline key={`${primaryItinerary.id}:${leg.id}`} coordinates={leg.geometry.coordinates}
+            strokeColor={leg.mode === 'bus' ? leg.color : '#475569'}
+            strokeWidth={leg.mode === 'bus' ? 6 : 3}
+            lineDashPattern={leg.mode === 'walk' || leg.geometry.source === 'approximate' ? [4, 6] : undefined} />
+        ))}
       </MapView>
 
+      {viewingDetail && primaryItinerary && (
+        <Pressable style={[styles.detailBackButton, { top: 16 + insets.top }]} onPress={closeDetail}
+          accessibilityRole="button" accessibilityLabel="Volver a las opciones de viaje">
+          <Ionicons name="arrow-back" size={22} color="#111827" />
+        </Pressable>
+      )}
+
+      <Pressable
+        style={[styles.locateButton, {
+          bottom: viewingDetail ? 16 + insets.bottom + sheetHeight(height, detailExpanded)
+            : (origin && destination) ? occupiedBottom + 12 : tabBarHeight + 16,
+        }]}
+        onPress={centerOnMe}
+        disabled={!mapReady || !canInteract || locating}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !mapReady || !canInteract || locating, busy: locating }}
+        accessibilityLabel="Centrar en mi ubicación"
+      >
+        {locating ? <ActivityIndicator color="#fff" /> : <Ionicons name="locate" size={24} color="#fff" />}
+      </Pressable>
+
+      {!viewingDetail && (
       <View style={[styles.topPanel, { top: 16 + insets.top }]}>
         <Text style={styles.eyebrow}>PLANEA TU VIAJE</Text>
         <View style={styles.titleRow}>
@@ -382,16 +389,10 @@ export function TripScreen() {
         </View>
 
         {location.positionError && <Pressable onPress={() => void location.locate()}><Text style={styles.mapHint}>{location.positionError} Toca para reintentar.</Text></Pressable>}
-        {(originWalk.route || destinationWalk.route) && (
-          <Text style={styles.mapHint}>
-            {originWalk.route ? `Caminata al origen: ${formatWalkingSummary(originWalk.route)}` : ''}
-            {originWalk.route && destinationWalk.route ? ' · ' : ''}
-            {destinationWalk.route ? `Caminata al destino: ${formatWalkingSummary(destinationWalk.route)}` : ''}
-          </Text>
-        )}
-        {!USE_DUMMY_DATA && (originWalk.error || destinationWalk.error) && (
-          <Text style={styles.mapHint}>No pudimos calcular la ruta a pie exacta; se muestra una línea aproximada.</Text>
-        )}
+        <Pressable onPress={() => setOptionsVisible(true)} accessibilityRole="button" style={styles.plannerOptions}>
+          <Ionicons name="options-outline" size={16} color="#1f6feb" />
+          <Text style={styles.plannerOptionsText}>Opciones · {preferenceLabels[preference]} · hasta {formatDistance(maxWalkingDistanceMeters)} a pie</Text>
+        </Pressable>
         {mapPickerTarget && (
           <Pressable style={styles.mapPickerHint} onPress={() => setMapPickerTarget(null)}>
             <Ionicons name="hand-left-outline" size={14} color="#1f6feb" />
@@ -402,106 +403,131 @@ export function TripScreen() {
           </Pressable>
         )}
       </View>
+      )}
 
-      {!USE_DUMMY_DATA && origin && destination && routeLines.length === 0 && (
-        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}>
-          <View style={styles.noRouteRow}>
-            <Ionicons name="alert-circle-outline" size={22} color="#dc2626" />
-            <Text style={styles.noRouteText}>No encontramos una ruta directa entre estas paradas. La búsqueda con transbordos aún no está disponible.</Text>
-          </View>
+      {!viewingDetail && origin && destination && (plan.loading || plan.error || !itineraries.length) && (
+        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}
+          onLayout={event => setOccupiedBottom(92 + insets.bottom + event.nativeEvent.layout.height)}>
+          {plan.loading ? <View style={styles.noRouteRow}><ActivityIndicator color="#1f6feb" /><Text style={styles.noRouteText}>Buscando caminatas, buses y conexiones…</Text></View>
+            : plan.error ? <DataStatus error={plan.error} retry={plan.reload} />
+            : <View style={styles.noRouteRow}><Ionicons name="information-circle-outline" size={22} color="#475569" /><Text style={styles.noRouteText}>{noJourneyMessage(plan.data?.meta.noRouteReason)}</Text></View>}
         </View>
       )}
 
-      {routeLines.length > 0 && !routesCollapsed && (
-        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}>
+      {!viewingDetail && primaryItinerary && !routesCollapsed && (
+        <View style={[styles.routesPanel, { bottom: 92 + insets.bottom }]}
+          onLayout={event => setOccupiedBottom(92 + insets.bottom + event.nativeEvent.layout.height)}>
           <View style={styles.routesHeader}>
-            <View>
-              <Text style={styles.routesTitle}>Rutas disponibles</Text>
-              <Text style={styles.routesSubtitle}>
-                {originWalk.route || destinationWalk.route
-                  ? 'Línea continua: bus · punteada: caminata'
-                  : USE_DUMMY_DATA ? 'Opciones simuladas para tu recorrido' : 'Rutas directas que conectan tus paradas'}
-              </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.routesTitle}>Opciones de viaje</Text>
+              <Text style={styles.routesSubtitle}>{USE_DUMMY_DATA ? 'Simulación · no usar para viajar' : 'Viaje completo de origen a destino'}</Text>
             </View>
-            <View style={styles.routeCount}>
-              <Text style={styles.routeCountText}>{routeLines.length}</Text>
-            </View>
-            <Pressable
-              style={styles.collapseButton}
-              onPress={() => setRoutesCollapsed(true)}
-              accessibilityLabel="Ocultar rutas posibles"
-            >
-              <Ionicons name="chevron-down" size={19} color="#475569" />
-            </Pressable>
+            <Pressable style={styles.collapseButton} onPress={plan.reload} accessibilityLabel="Actualizar viajes para salir ahora"><Ionicons name="refresh" size={18} color="#475569" /></Pressable>
+            <Pressable style={styles.collapseButton} onPress={() => setRoutesCollapsed(true)} accessibilityLabel="Ocultar viajes"><Ionicons name="chevron-down" size={19} color="#475569" /></Pressable>
           </View>
-
-          <FlatList
-            data={routeLines}
-            keyExtractor={(item) => item.id}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.routeList}
-            renderItem={({ item }) => (
-              <Pressable
-                style={[styles.routeCard, primaryRouteId === item.id && styles.routeCardSelected]}
-                onPress={() => setSelectedRouteId(item.id)}
-                accessibilityLabel={`Mostrar ${item.name} en el mapa`}
-                accessibilityRole="button"
-              >
-                <View style={[styles.routeStripe, { backgroundColor: item.color }]} />
+          <FlatList data={itineraries} keyExtractor={item => item.id} horizontal showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.routeList} renderItem={({ item }) => (
+              <Pressable style={[styles.routeCard, primaryItinerary.id === item.id && styles.routeCardSelected]}
+                onPress={() => { setSelectedRouteId(item.id); setDetailExpanded(false); setViewingDetail(true); }} accessibilityRole="button"
+                accessibilityState={{ selected: primaryItinerary.id === item.id }} accessibilityLabel={`Ver viaje ${itineraryTitle(item)} en el mapa`}>
+                <View style={[styles.routeStripe, { backgroundColor: itineraryColor(item) }]} />
                 <View style={styles.routeCardContent}>
-                  <View style={styles.routeCardTop}>
-                    <Text style={styles.routeName}>{item.name}</Text>
-                    <Ionicons
-                      name={primaryRouteId === item.id ? 'checkmark-circle' : 'arrow-forward-circle'}
-                      size={22}
-                      color={item.color}
-                    />
-                  </View>
-                  <Text style={styles.routeDescription}>{item.description}</Text>
-                  <View style={styles.routeMetaRow}>
-                    <Text style={styles.routeDuration}>{item.duration}</Text>
-                    <Text style={styles.routeMeta}>{item.transfers}</Text>
-                    <Text style={styles.routeMeta}>{item.stops}</Text>
-                  </View>
+                  <Text style={styles.routeName}>{itineraryTitle(item)}</Text>
+                  <Text style={styles.routeDescription}>{item.transfers === 0 ? 'Sin transbordos' : `${item.transfers} transbordo${item.transfers > 1 ? 's' : ''}`} · {formatDistance(item.walkingDistanceMeters)} a pie</Text>
+                  <Text style={[styles.routeDuration, { marginTop: 8 }]}>{itineraryDuration(item)}</Text>
                 </View>
               </Pressable>
-            )}
-          />
-
-          {primaryRoute && (
-            <View style={styles.stopListContainer}>
-              <Text style={styles.stopListTitle}>Estaciones del recorrido</Text>
-              <FlatList
-                data={primaryRoute.stopNames}
-                keyExtractor={(name, index) => `${name}-${index}`}
-                style={styles.stopListScroll}
-                renderItem={({ item: name, index }) => (
-                  <View style={styles.stopRow}>
-                    <Text style={[styles.stopDot, { color: primaryRoute.color }]}>●</Text>
-                    <Text style={styles.stopName} numberOfLines={1}>{index + 1}. {name}</Text>
-                  </View>
-                )}
-              />
-            </View>
-          )}
+            )} />
         </View>
       )}
-
-      {routeLines.length > 0 && routesCollapsed && (
-        <Pressable
-          style={[styles.collapsedRoutesTab, { bottom: 98 + insets.bottom }]}
-          onPress={() => setRoutesCollapsed(false)}
-          accessibilityLabel="Mostrar rutas posibles"
-        >
+      {!viewingDetail && primaryItinerary && routesCollapsed && (
+        <Pressable style={[styles.collapsedRoutesTab, { bottom: 98 + insets.bottom }]}
+          onLayout={event => setOccupiedBottom(98 + insets.bottom + event.nativeEvent.layout.height)}
+          onPress={() => setRoutesCollapsed(false)} accessibilityLabel="Mostrar viajes">
           <Ionicons name="map-outline" size={18} color="#1f6feb" />
-          <Text style={styles.collapsedRoutesText}>Mostrar rutas posibles</Text>
-          <View style={styles.collapsedRouteCount}>
-            <Text style={styles.collapsedRouteCountText}>{routeLines.length}</Text>
-          </View>
+          <Text style={styles.collapsedRoutesText}>Mostrar {itineraries.length} opciones de viaje</Text>
           <Ionicons name="chevron-up" size={18} color="#64748b" />
         </Pressable>
       )}
+
+      {viewingDetail && primaryItinerary && (
+        <MapDetailSheet
+          title={itineraryTitle(primaryItinerary)}
+          subtitle={`${primaryItinerary.transfers === 0 ? 'Sin transbordos' : `${primaryItinerary.transfers} transbordo${primaryItinerary.transfers > 1 ? 's' : ''}`} · ${formatDistance(primaryItinerary.walkingDistanceMeters)} a pie · ${itineraryDuration(primaryItinerary)}`}
+          expanded={detailExpanded}
+          onExpand={setDetailExpanded}
+          onBack={closeDetail}
+          showBackButton={false}
+          onClear={clearTrip}
+        >
+          <Text style={styles.stopListTitle}>Paso a paso</Text>
+          <FlatList data={timeline} keyExtractor={item => item.id} style={styles.detailStepsList}
+            renderItem={({ item, index }) => {
+              const isLast = index === timeline.length - 1;
+              if (item.kind === 'node') return (
+                <View style={styles.timelineRow}>
+                  <View style={styles.timelineRail}>
+                    <View style={[styles.timelineDot, { backgroundColor: item.color }]} />
+                    {!isLast && <View style={styles.timelineLine} />}
+                  </View>
+                  <View style={styles.timelineBody}>
+                    <Text style={styles.timelineStopName}>{item.name}</Text>
+                  </View>
+                </View>
+              );
+              const leg = item.leg;
+              return (
+                <View style={styles.timelineRow}>
+                  <View style={styles.timelineRail}>
+                    <View style={[styles.timelineIconBubble, { backgroundColor: leg.mode === 'bus' ? leg.color : '#94a3b8' }]}>
+                      <Ionicons name={leg.mode === 'walk' ? 'walk' : 'bus'} size={12} color="#fff" />
+                    </View>
+                    {!isLast && <View style={styles.timelineLine} />}
+                  </View>
+                  <View style={styles.timelineBody}>
+                    {leg.mode === 'walk' ? <Text style={styles.timelineLegText}>{walkStepLabel(leg)}</Text> : <>
+                      <View style={styles.timelineBusRow}>
+                        <View style={[styles.timelineRouteBadge, { backgroundColor: leg.color }]}><Text style={styles.timelineRouteBadgeText}>{leg.routeCode}</Text></View>
+                        <Text style={styles.timelineLegText} numberOfLines={2}>hacia {leg.headsign}</Text>
+                      </View>
+                      <Text style={styles.timelineLegMeta}>{formatDuration(leg.durationSeconds)} en bus{leg.geometry.source === 'approximate' ? ' · trazado aproximado' : ''}</Text>
+                      <Text style={styles.timelineLegMeta}>{busWaitLabel(leg)}</Text>
+                    </>}
+                  </View>
+                </View>
+              );
+            }} />
+        </MapDetailSheet>
+      )}
+
+      <Modal transparent animationType="slide" visible={optionsVisible && canInteract} onRequestClose={() => setOptionsVisible(false)}>
+        <Pressable style={styles.modalOverlay} onPress={() => setOptionsVisible(false)} />
+        <View style={[styles.modalContainer, { paddingBottom: 24 + insets.bottom }]}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Opciones de viaje</Text>
+            <Pressable onPress={() => setOptionsVisible(false)} accessibilityLabel="Cerrar opciones"><Ionicons name="close" size={26} color="#111827" /></Pressable>
+          </View>
+          <Text style={styles.stopListTitle}>Prefiero</Text>
+          <View style={styles.optionRow}>{(Object.keys(preferenceLabels) as JourneyPreference[]).map(value => (
+            <Pressable key={value} onPress={() => { setPreference(value); setSelectedRouteId(null); }} style={[styles.optionChip, preference === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: preference === value }}>
+              <Text style={styles.plannerOptionsText}>{preferenceLabels[value]}</Text>
+            </Pressable>
+          ))}</View>
+          <Text style={styles.stopListTitle}>Caminata máxima total (incluye transbordos)</Text>
+          <View style={styles.optionRow}>{[500, 1000, 1500, 2500].map(value => (
+            <Pressable key={value} onPress={() => { setMaxWalkingDistanceMeters(value); setSelectedRouteId(null); }} style={[styles.optionChip, maxWalkingDistanceMeters === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: maxWalkingDistanceMeters === value }}>
+              <Text style={styles.plannerOptionsText}>{formatDistance(value)}</Text>
+            </Pressable>
+          ))}</View>
+          <Text style={styles.stopListTitle}>Máximo de transbordos</Text>
+          <View style={styles.optionRow}>{[0, 1, 2].map(value => (
+            <Pressable key={value} onPress={() => { setMaxTransfers(value); setSelectedRouteId(null); }} style={[styles.optionChip, maxTransfers === value && styles.optionChipSelected]} accessibilityRole="radio" accessibilityState={{ checked: maxTransfers === value }}>
+              <Text style={styles.plannerOptionsText}>{value === 0 ? 'Sin transbordos' : value}</Text>
+            </Pressable>
+          ))}</View>
+          <Pressable style={styles.mapPickerItem} onPress={() => { setOptionsVisible(false); setRoutesCollapsed(false); }} accessibilityRole="button"><Text style={styles.plannerOptionsText}>Ver viajes</Text></Pressable>
+        </View>
+      </Modal>
 
       <Modal transparent animationType="slide" visible={pickerVisible && canInteract} onRequestClose={() => setPickerVisible(false)}>
         <Pressable style={styles.modalOverlay} onPress={() => setPickerVisible(false)} />
@@ -579,6 +605,11 @@ export function TripScreen() {
 }
 
 const styles = StyleSheet.create({
+  plannerOptions: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  plannerOptionsText: { color: '#1f6feb', fontSize: 12, fontWeight: '600', flexShrink: 1 },
+  optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
+  optionChip: { padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#dbe2ea' },
+  optionChipSelected: { backgroundColor: '#dbeafe', borderColor: '#1f6feb' },
   container: {
     flex: 1,
     backgroundColor: '#dbeafe',
@@ -594,6 +625,38 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.14,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  detailBackButton: {
+    position: 'absolute',
+    left: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 8,
+  },
+  locateButton: {
+    position: 'absolute',
+    right: 18,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#0f766e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 8,
   },
   eyebrow: {
@@ -772,19 +835,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-  routeCount: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#dbeafe',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  routeCountText: {
-    color: '#1f6feb',
-    fontSize: 14,
-    fontWeight: '800',
-  },
   collapseButton: {
     width: 32,
     height: 32,
@@ -835,31 +885,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginLeft: 9,
   },
-  collapsedRouteCount: {
-    minWidth: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#dbeafe',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 9,
-  },
-  collapsedRouteCountText: {
-    color: '#1f6feb',
-    fontSize: 12,
-    fontWeight: '800',
-  },
   routeStripe: {
     width: 5,
   },
   routeCardContent: {
     flex: 1,
     padding: 12,
-  },
-  routeCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   routeName: {
     color: '#111827',
@@ -872,24 +903,10 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 5,
   },
-  routeMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 11,
-  },
   routeDuration: {
     color: '#111827',
     fontSize: 15,
     fontWeight: '800',
-  },
-  routeMeta: {
-    color: '#64748b',
-    fontSize: 10,
-  },
-  stopListContainer: {
-    marginTop: 14,
-    paddingHorizontal: 18,
   },
   stopListTitle: {
     color: '#111827',
@@ -897,23 +914,70 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginBottom: 8,
   },
-  stopListScroll: {
-    maxHeight: 150,
-  },
-  stopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 4,
-  },
-  stopDot: {
-    fontSize: 14,
-  },
-  stopName: {
+  detailStepsList: {
     flex: 1,
+  },
+  timelineRow: {
+    flexDirection: 'row',
+  },
+  timelineRail: {
+    width: 28,
+    alignItems: 'center',
+  },
+  timelineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginTop: 5,
+  },
+  timelineIconBubble: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineLine: {
+    flex: 1,
+    width: 2,
+    marginTop: 2,
+    backgroundColor: '#cbd5e1',
+  },
+  timelineBody: {
+    flex: 1,
+    paddingLeft: 10,
+    paddingBottom: 16,
+  },
+  timelineStopName: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  timelineLegText: {
     color: '#334155',
     fontSize: 13,
     fontWeight: '600',
+    flexShrink: 1,
+  },
+  timelineLegMeta: {
+    color: '#64748b',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  timelineBusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  timelineRouteBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  timelineRouteBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
   },
   modalOverlay: {
     flex: 1,

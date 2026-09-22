@@ -1,7 +1,11 @@
+import { PassCheckout, type CheckoutProduct } from '../components/PassCheckout';
+import { DynamicPassQr } from '../components/DynamicPassQr';
+import { buyPass, activatePass, type PaymentMethod } from '../services/passWallet';
+import type { PurchasedPass } from '../services/startup';
 import { useIsFocused } from '@react-navigation/native';
 import { useViewTiming } from '../hooks/useViewTiming';
-import React, { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSession } from '../context/Session';
@@ -11,7 +15,7 @@ import { DataStatus } from '../components/DataStatus';
 import { getProducts, USE_DUMMY_DATA } from '../services/transit';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type PassType = 'round_trip' | '7_days' | '28_days';
+type PassType = string;
 
 type Pass = {
   id: string;
@@ -23,8 +27,9 @@ type Pass = {
   validUntil: string;
   usageLabel: string;
   remainingUses: number | null;
-  status: 'Vigente' | 'Expirado';
+  status: 'Vigente' | 'Expirado' | 'Por activar' | 'Perdido';
   token: string;
+  raw?: PurchasedPass;
 };
 
 const singleTripPrice = 3000;
@@ -43,18 +48,26 @@ export function PassScreen() {
   const [tab, setTab] = useState<'history' | 'buy'>('history');
   const { account, busy, restoreError } = useSession();
   const purchased = usePurchasedPasses();
+  const [buying,setBuying]=useState(false);
+  const buyingRef=useRef(false);
+  const accountRef=useRef(account?.id);accountRef.current=account?.id;
   const [demoPasses, setPasses] = useState(initialPasses);
   const formatDate = (value: string) => new Date(value).toLocaleString('es-CO');
-  const passes: Pass[] = USE_DUMMY_DATA ? (account ? demoPasses : []) : (purchased.passes ?? []).map(pass => ({
-    id: pass.id, type: pass.productId, name: pass.name, detail: pass.description, price: formatCop(pass.price),
-    purchasedAt: formatDate(pass.purchasedAt), validUntil: pass.expiresAt ? formatDate(pass.expiresAt) : 'Sin fecha límite',
-    usageLabel: pass.remainingUses === null ? 'Usos ilimitados' : `${pass.remainingUses} usos restantes`,
-    remainingUses: pass.remainingUses, status: pass.status === 'active' ? 'Vigente' : 'Expirado', token: '',
-  }));
-  const [selectedPass, setSelectedPass] = useState<Pass | null>(null);
-  useEffect(() => { setSelectedPass(null); setPasses(initialPasses); }, [account?.id]);
+  const displayPass=(pass:PurchasedPass):Pass=>{
+    const lost=pass.status==='activation_expired'||(pass.status==='pending_activation'&&Boolean(pass.activateBefore)&&Date.parse(pass.activateBefore!)<=Date.now());
+    const status:Pass['status']=lost?'Perdido':pass.status==='pending_activation'?'Por activar':pass.status==='active'&&(!pass.expiresAt||Date.parse(pass.expiresAt)>Date.now())?'Vigente':'Expirado';
+    return {id:pass.id,type:pass.productId,name:pass.name,detail:pass.description,price:formatCop(pass.price),purchasedAt:formatDate(pass.purchasedAt),validUntil:status==='Por activar'?`Activa antes de ${formatDate(pass.activateBefore!)}`:status==='Perdido'?'Plazo de activación vencido':pass.expiresAt?`Válido hasta ${formatDate(pass.expiresAt)}`:'Sin fecha límite',usageLabel:pass.remainingUses===null?'Usos ilimitados':`${pass.remainingUses} usos restantes`,remainingUses:pass.remainingUses,status,token:'',raw:pass};
+  };
+  const passes: Pass[]=USE_DUMMY_DATA?(account?demoPasses.map(p=>p.raw?displayPass(p.raw):p):[]):(purchased.passes??[]).map(displayPass);
+  const [selectedTicket,setSelectedPass]=useState<Pass|null>(null);
+  const selectedPass=selectedTicket?.raw?displayPass(selectedTicket.raw):selectedTicket;
+  const [checkout,setCheckout]=useState<CheckoutProduct|null>(null);
+  const [,tick]=useState(0);
+  useEffect(()=>{const timer=setInterval(()=>tick(n=>n+1),1000);return()=>clearInterval(timer);},[]);
+  useEffect(()=>{setSelectedPass(null);setCheckout(null);setPasses(initialPasses);},[account?.id]);
   const productData = useRemoteData(getProducts);
   const products = (productData.data ?? []).map(product => ({
+    validityDays:product.validityDays,uses:product.uses,amount:product.price,
     type: product.id, name: product.name, price: formatCop(product.price),
     detail: product.uses === null ? 'Viajes ilimitados durante la vigencia' : `${product.uses} viajes`,
     validity: product.validityDays === null ? `Válido para ${product.uses} usos` : `Válido por ${product.validityDays} días`,
@@ -62,12 +75,31 @@ export function PassScreen() {
     icon: (product.id === 'round_trip' ? 'repeat-outline' : product.id === '7_days' ? 'calendar-outline' : 'calendar-number-outline') as keyof typeof Ionicons.glyphMap,
   }));
 
-  const buy = (product: (typeof products)[number]) => {
-    if (!USE_DUMMY_DATA || !account) return;
-    const pass: Pass = { id: `pass-${Date.now()}`, type: product.type, name: product.name, detail: product.detail, price: product.price, purchasedAt: 'Ahora', validUntil: product.type === 'round_trip' ? 'Hoy' : product.type === '7_days' ? 'En 7 días' : 'En 28 días', usageLabel: product.usageLabel, remainingUses: product.type === 'round_trip' ? 2 : null, status: 'Vigente', token: `BP-${Math.random().toString(16).slice(2, 10).toUpperCase()}` };
-    setPasses((current) => [pass, ...current]);
-    setSelectedPass(pass);
-    setTab('history');
+  const buy = async (product: CheckoutProduct, paymentMethod:PaymentMethod) => {
+    if (!account || buyingRef.current) return;
+    if (!USE_DUMMY_DATA) {
+      const owner=account.id;buyingRef.current=true;setBuying(true);
+      try {
+        const raw=await buyPass(owner,product.type,paymentMethod);
+        if(accountRef.current!==owner)return;
+        purchased.reload();setTab('history');setCheckout(null);setSelectedPass(displayPass(raw));
+      } catch(error) {if(accountRef.current===owner)Alert.alert('No se pudo completar la compra',error instanceof Error?error.message:'Intenta nuevamente.');}
+      finally {buyingRef.current=false;setBuying(false);}
+      return;
+    }
+    const found=products.find(p=>p.type===product.type)!;
+    const raw:PurchasedPass={id:`demo-${Date.now()}`,productId:product.type,name:product.name,description:product.detail,price:found.amount,currency:'COP',purchasedAt:new Date().toISOString(),expiresAt:null,remainingUses:found.uses,status:'pending_activation',activateBefore:new Date(Date.now()+86400000).toISOString(),activatedAt:null,validityDays:found.validityDays,paymentMethod};
+    const pass=displayPass(raw);setPasses(current=>[pass,...current]);setSelectedPass(pass);setCheckout(null);setTab('history');
+  };
+  const activateSelected=async()=>{
+    if(!account||!selectedPass?.raw||buyingRef.current)return;
+    const owner=account.id,pass=selectedPass.raw;buyingRef.current=true;setBuying(true);
+    try{
+      const raw:PurchasedPass=USE_DUMMY_DATA?{...pass,status:'active',activatedAt:new Date().toISOString(),expiresAt:pass.validityDays?new Date(Date.now()+pass.validityDays*86400000).toISOString():null}:await activatePass(owner,pass.id);
+      if(accountRef.current!==owner)return;
+      const updated=displayPass(raw);setSelectedPass(updated);setPasses(current=>current.map(p=>p.id===raw.id?updated:p));purchased.reload();
+    }catch(error){if(accountRef.current===owner)Alert.alert('No se pudo activar',error instanceof Error?error.message:'Intenta nuevamente.');}
+    finally{buyingRef.current=false;setBuying(false);}
   };
 
   return (
@@ -99,29 +131,32 @@ export function PassScreen() {
             {account && !USE_DUMMY_DATA && !purchased.passes && <DataStatus error={purchased.error} retry={purchased.reload} />}
             {account && !USE_DUMMY_DATA && purchased.passes && <Pressable accessibilityRole="button" onPress={purchased.reload}><Text style={styles.productValidity}>Actualizar pasabordos</Text></Pressable>}
             {account && (USE_DUMMY_DATA || purchased.passes) && passes.length === 0 && <Text style={styles.infoText}>Todavía no tienes pasabordos comprados.</Text>}
+            <Text style={styles.section}>Por activar</Text>
+            {passes.filter(pass=>pass.status==='Por activar').map(pass=><PassCard key={pass.id} pass={pass} onPress={()=>setSelectedPass(pass)}/>)}
             <Text style={styles.section}>Vigentes</Text>
             {passes.filter((pass) => pass.status === 'Vigente').map((pass) => <PassCard key={pass.id} pass={pass} onPress={() => setSelectedPass(pass)} />)}
             <Text style={[styles.section, styles.expiredSection]}>Historial expirado</Text>
-            {passes.filter((pass) => pass.status === 'Expirado').map((pass) => <PassCard key={pass.id} pass={pass} onPress={() => setSelectedPass(pass)} />)}
+            {passes.filter((pass) => (pass.status === 'Expirado' || pass.status === 'Perdido')).map((pass) => <PassCard key={pass.id} pass={pass} onPress={() => setSelectedPass(pass)} />)}
             </>}
           </>
         ) : (
           <>
-            <View style={styles.info}><Ionicons name="shield-checkmark-outline" size={24} color="#1f6feb" /><Text style={styles.infoText}>El backend asociará el pasabordo a un único dispositivo y firmará el ticket.</Text></View>
+            <View style={styles.info}><Ionicons name="shield-checkmark-outline" size={24} color="#1f6feb" /><Text style={styles.infoText}>Tu pasabordo queda vinculado a este teléfono. La vigencia comienza cuando lo activas.</Text></View>
             {!productData.data && <DataStatus error={productData.error} retry={productData.reload} />}
-            {!USE_DUMMY_DATA && <Text style={[styles.productDetail, { marginBottom: 12 }]}>Las compras estarán disponibles próximamente.</Text>}
-            {products.map((product) => <View style={styles.product} key={product.name}><View style={styles.productIcon}><Ionicons name={product.icon} size={23} color="#1f6feb" /></View><View style={styles.productText}><Text style={styles.productName}>{product.name}</Text><Text style={styles.productDetail}>{product.detail}</Text><Text style={styles.productValidity}>{product.validity} · {product.usageLabel}</Text><Text style={styles.price}>{product.price}</Text></View><Pressable style={[styles.buyButton, !USE_DUMMY_DATA && { opacity: 0.4 }]} disabled={!USE_DUMMY_DATA || !account} onPress={() => buy(product)} accessibilityLabel={`Comprar ${product.name}`}><Ionicons name="arrow-forward" size={19} color="#fff" /></Pressable></View>)}
+            {!USE_DUMMY_DATA && <Text style={[styles.productDetail, { marginBottom: 12 }]}>Compras de prueba: se aprueban automáticamente y no se realiza ningún cobro.</Text>}
+            {products.map((product) => <Pressable style={styles.product} key={product.type} disabled={buying||!account} onPress={()=>setCheckout(product)} accessibilityRole="button" accessibilityLabel={`Ver detalle de ${product.name}`}><View style={styles.productIcon}><Ionicons name={product.icon} size={23} color="#1f6feb" /></View><View style={styles.productText}><Text style={styles.productName}>{product.name}</Text><Text style={styles.productDetail}>{product.detail}</Text><Text style={styles.productValidity}>{product.validity} · {product.usageLabel}</Text><Text style={styles.price}>{product.price}</Text></View><Pressable style={[styles.buyButton, (buying || !account) && { opacity: 0.4 }]} disabled={buying || !account} onPress={() => setCheckout(product)} accessibilityLabel={`Comprar ${product.name}`}><Ionicons name="arrow-forward" size={19} color="#fff" /></Pressable></Pressable>)}
           </>
         )}
       </ScrollView>
+      {account&&checkout&&<PassCheckout product={checkout} busy={buying} onBack={()=>setCheckout(null)} onConfirm={method=>void buy(checkout,method)}/>}
       <Modal transparent animationType="slide" visible={Boolean(account && selectedPass)} onRequestClose={() => setSelectedPass(null)}>
-        <View style={styles.backdrop}><View style={[styles.modal, { paddingBottom: 24 + insets.bottom }]}><View style={styles.handle} /><View style={styles.modalHeader}><View><Text style={styles.eyebrow}>PASABORDO DIGITAL</Text><Text style={styles.modalTitle}>{selectedPass?.name}</Text></View><Pressable onPress={() => setSelectedPass(null)}><Ionicons name="close" size={26} color="#111827" /></Pressable></View><Text style={styles.journey}>{selectedPass?.detail}</Text><Text style={styles.modalMeta}>{selectedPass?.price} · Válido hasta {selectedPass?.validUntil}</Text>{selectedPass?.status === 'Vigente' ? USE_DUMMY_DATA ? <TicketCode value={selectedPass.token} /> : <Text style={styles.expired}>Pasabordo vigente. La validación para abordar estará disponible próximamente.</Text> : <Text style={styles.expired}>Este pasabordo ya expiró.</Text>}{USE_DUMMY_DATA && <View style={styles.validation}><View><Ionicons name="qr-code-outline" size={22} color="#1f6feb" /><Text style={styles.validationTitle}>QR dinámico</Text></View><View><Ionicons name="radio-outline" size={22} color="#0f766e" /><Text style={styles.validationTitle}>NFC listo</Text></View></View>}<Text style={styles.footer}>{USE_DUMMY_DATA ? 'Simulación' : 'Pasabordo'} · {selectedPass?.token}</Text></View></View>
+        <View style={styles.backdrop}><View style={[styles.modal, { paddingBottom: 24 + insets.bottom }]}><View style={styles.handle} /><View style={styles.modalHeader}><View><Text style={styles.eyebrow}>PASABORDO DIGITAL</Text><Text style={styles.modalTitle}>{selectedPass?.name}</Text></View><Pressable onPress={() => setSelectedPass(null)}><Ionicons name="close" size={26} color="#111827" /></Pressable></View><Text style={styles.journey}>{selectedPass?.detail}</Text><Text style={styles.modalMeta}>{selectedPass?.price} · {selectedPass?.validUntil}</Text>{selectedPass?.status==='Por activar'?<View><Text style={styles.infoText}>Tu pase está comprado. Actívalo antes del plazo indicado; desde ese momento comienza su vigencia.</Text><Pressable disabled={buying} accessibilityRole="button" onPress={()=>Alert.alert('Activar pasabordo','La vigencia comenzará ahora y no podrá pausarse.',[{text:'Volver',style:'cancel'},{text:'Activar ahora',onPress:()=>void activateSelected()}])}><Text style={styles.signInAction}>{buying?'Activando…':'Activar pasabordo'}</Text></Pressable></View>:selectedPass?.status === 'Vigente' ? USE_DUMMY_DATA ? <TicketCode value={selectedPass.token} /> : selectedPass.raw ? <DynamicPassQr pass={selectedPass.raw}/> : <Text style={styles.expired}>Este pase antiguo no tiene una instalación vinculada.</Text> : <Text style={styles.expired}>{selectedPass?.status==='Perdido'?'Perdiste este pase porque venció el plazo para activarlo.':'Este pasabordo ya expiró.'}</Text>}{USE_DUMMY_DATA && <View style={styles.validation}><View><Ionicons name="qr-code-outline" size={22} color="#1f6feb" /><Text style={styles.validationTitle}>QR dinámico</Text></View><View><Ionicons name="radio-outline" size={22} color="#0f766e" /><Text style={styles.validationTitle}>NFC listo</Text></View></View>}<Text style={styles.footer}>{USE_DUMMY_DATA ? 'Simulación' : 'Pasabordo'} · {selectedPass?.token}</Text></View></View>
       </Modal>
     </View>
   );
 }
 
-function PassCard({ pass, onPress }: { pass: Pass; onPress: () => void }) { const active = pass.status === 'Vigente'; return <Pressable style={styles.card} onPress={onPress}><View style={[styles.stripe, { backgroundColor: active ? '#0f766e' : '#94a3b8' }]} /><View style={styles.cardBody}><View style={styles.cardTop}><Text style={styles.route}>{pass.name}</Text><Text style={[styles.status, active ? styles.active : styles.inactive]}>{pass.status}</Text></View><Text style={styles.journey}>{pass.detail}</Text><Text style={styles.cardUsage}>{pass.usageLabel} · hasta {pass.validUntil}</Text><Text style={styles.date}>{pass.purchasedAt} · {pass.price}</Text></View><Ionicons name="chevron-forward" size={18} color="#94a3b8" /></Pressable>; }
+function PassCard({ pass, onPress }: { pass: Pass; onPress: () => void }) { const active = pass.status === 'Vigente'; return <Pressable style={styles.card} onPress={onPress}><View style={[styles.stripe, { backgroundColor: active ? '#0f766e' : '#94a3b8' }]} /><View style={styles.cardBody}><View style={styles.cardTop}><Text style={styles.route}>{pass.name}</Text><Text style={[styles.status, active ? styles.active : styles.inactive]}>{pass.status}</Text></View><Text style={styles.journey}>{pass.detail}</Text><Text style={styles.cardUsage}>{pass.usageLabel} · {pass.validUntil}</Text><Text style={styles.date}>{pass.purchasedAt} · {pass.price}</Text></View><Ionicons name="chevron-forward" size={18} color="#94a3b8" /></Pressable>; }
 
 function TicketCode({ value }: { value: string }) { return <View style={styles.codeBox}><View style={styles.codeGrid}>{Array.from({ length: 64 }, (_, index) => <View key={index} style={[styles.codeCell, ((value.charCodeAt(index % value.length) + index * 7) % 5) < 2 && styles.codeCellFilled]} />)}</View><Text style={styles.codeLabel}>Código dinámico del dispositivo</Text></View>; }
 

@@ -1,0 +1,207 @@
+{
+  "request": {
+    "origin": {
+      "latitude": 4.81,
+      "longitude": -75.73
+    },
+    "destination": {
+      "latitude": 4.82,
+      "longitude": -75.69
+    },
+    "departureTime": "2026-09-21T15:00:00.000Z",
+    "preferences": {
+      "maxWalkingDistanceMeters": 1500,
+      "maxTransfers": 2,
+      "optimize": "fastest"
+    }
+  },
+  "response": {
+    "data": {
+      "itineraries": [
+        {
+          "id": "example-transfer",
+          "legs": [
+            {
+              "id": "access",
+              "mode": "walk",
+              "from": {
+                "latitude": 4.81,
+                "longitude": -75.73,
+                "name": "Origen"
+              },
+              "to": {
+                "latitude": 4.811,
+                "longitude": -75.729,
+                "name": "Parada A (ejemplo)",
+                "stopId": "example-A"
+              },
+              "durationSeconds": 90,
+              "distanceMeters": 120,
+              "geometry": {
+                "coordinates": [
+                  {
+                    "latitude": 4.81,
+                    "longitude": -75.73
+                  },
+                  {
+                    "latitude": 4.811,
+                    "longitude": -75.729
+                  }
+                ],
+                "source": "approximate"
+              }
+            },
+            {
+              "id": "R1",
+              "mode": "bus",
+              "from": {
+                "latitude": 4.811,
+                "longitude": -75.729,
+                "name": "Parada A (ejemplo)",
+                "stopId": "example-A"
+              },
+              "to": {
+                "latitude": 4.815,
+                "longitude": -75.71,
+                "name": "Parada B (ejemplo)",
+                "stopId": "example-B"
+              },
+              "durationSeconds": 300,
+              "distanceMeters": 2200,
+              "geometry": {
+                "coordinates": [
+                  {
+                    "latitude": 4.811,
+                    "longitude": -75.729
+                  },
+                  {
+                    "latitude": 4.815,
+                    "longitude": -75.71
+                  }
+                ],
+                "source": "approximate"
+              },
+              "routeId": "example-route-R1",
+              "variantId": "example-variant-R1",
+              "routeCode": "R1",
+              "headsign": "Parada B (ejemplo)",
+              "color": "#1f6feb",
+              "waitSeconds": 180,
+              "timingSource": "estimated"
+            },
+            {
+              "id": "transfer",
+              "mode": "walk",
+              "from": {
+                "latitude": 4.815,
+                "longitude": -75.71,
+                "name": "Parada B (ejemplo)",
+                "stopId": "example-B"
+              },
+              "to": {
+                "latitude": 4.8155,
+                "longitude": -75.709,
+                "name": "Parada C (ejemplo)",
+                "stopId": "example-C"
+              },
+              "durationSeconds": 60,
+              "distanceMeters": 80,
+              "geometry": {
+                "coordinates": [
+                  {
+                    "latitude": 4.815,
+                    "longitude": -75.71
+                  },
+                  {
+                    "latitude": 4.8155,
+                    "longitude": -75.709
+                  }
+                ],
+                "source": "approximate"
+              }
+            },
+            {
+              "id": "R2",
+              "mode": "bus",
+              "from": {
+                "latitude": 4.8155,
+                "longitude": -75.709,
+                "name": "Parada C (ejemplo)",
+                "stopId": "example-C"
+              },
+              "to": {
+                "latitude": 4.819,
+                "longitude": -75.691,
+                "name": "Parada D (ejemplo)",
+                "stopId": "example-D"
+              },
+              "durationSeconds": 420,
+              "distanceMeters": 2100,
+              "geometry": {
+                "coordinates": [
+                  {
+                    "latitude": 4.8155,
+                    "longitude": -75.709
+                  },
+                  {
+                    "latitude": 4.819,
+                    "longitude": -75.691
+                  }
+                ],
+                "source": "approximate"
+              },
+              "routeId": "example-route-R2",
+              "variantId": "example-variant-R2",
+              "routeCode": "R2",
+              "headsign": "Parada D (ejemplo)",
+              "color": "#1f6feb",
+              "waitSeconds": 240,
+              "timingSource": "estimated"
+            },
+            {
+              "id": "egress",
+              "mode": "walk",
+              "from": {
+                "latitude": 4.819,
+                "longitude": -75.691,
+                "name": "Parada D (ejemplo)",
+                "stopId": "example-D"
+              },
+              "to": {
+                "latitude": 4.82,
+                "longitude": -75.69,
+                "name": "Destino"
+              },
+              "durationSeconds": 100,
+              "distanceMeters": 140,
+              "geometry": {
+                "coordinates": [
+                  {
+                    "latitude": 4.819,
+                    "longitude": -75.691
+                  },
+                  {
+                    "latitude": 4.82,
+                    "longitude": -75.69
+                  }
+                ],
+                "source": "approximate"
+              }
+            }
+          ],
+          "durationSeconds": 1390,
+          "walkingDistanceMeters": 340,
+          "transfers": 1,
+          "warnings": [
+            "Ejemplo sintético del contrato; no representa un viaje real."
+          ]
+        }
+      ]
+    },
+    "meta": {
+      "contractVersion": 1,
+      "source": "backend",
+      "generatedAt": "2026-09-21T15:00:00.000Z"
+    }
+  }
+}

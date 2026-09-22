@@ -1,5 +1,9 @@
 # Ruta a pie real en Viaje
 
+> Documento histórico: Viaje ahora consume itinerarios completos mediante `POST /journeys/plan`.
+> Ya no selecciona paradas con `getNearestStops` ni llama a Google Directions desde esta pantalla.
+> Ver [el contrato actual](journey-planning.md). El servicio y sus pruebas anteriores se conservan como código heredado.
+
 ## Qué resuelve
 
 En Viaje, el origen/destino puede ser un punto libre (mapa, "mi ubicación", o una estación). El tramo caminando entre ese punto libre y la estación más cercana ya elegida (`getNearestStop`, sin cambios) se dibujaba como una línea recta. Ahora ese tramo se calcula con la Directions API de Google (`mode=walking`), llamada directamente desde el móvil con la misma API key ya embebida en `app.json`. No hay backend propio involucrado en este cálculo.

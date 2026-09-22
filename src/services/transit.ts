@@ -26,7 +26,7 @@ export type ArrivalsResponse = {
   data: { station: Location; servingRoutes: { route: RouteOption; variant: RouteVariant }[]; arrivals: Arrival[]; buses?: LiveBus[]; incidents?: Incident[] };
   meta: { source: 'demo' | 'live'; generatedAt: string; refreshAfterSeconds: number };
 };
-export type Product = { id: 'round_trip' | '7_days' | '28_days'; name: string; price: number; currency: 'COP'; uses: number | null; validityDays: number | null };
+export type Product = { id: string; name: string; price: number; currency: 'COP'; uses: number | null; validityDays: number | null };
 
 export class ApiError extends Error {
   constructor(public status: number) { super(`El servicio no pudo completar la consulta (${status}).`); }

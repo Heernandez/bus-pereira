@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { LocationAccessProvider } from './src/context/LocationAccess';
+import { getTabBarStyle } from './src/navigation/tabBar';
 
 import { ExploreScreen } from './src/screens/ExploreScreen';
 import { TripScreen } from './src/screens/TripScreen';
@@ -80,11 +81,7 @@ function AppContent() {
         initialRouteName="Explorar"
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarStyle: {
-            ...styles.tabBar,
-            height: 78 + insets.bottom,
-            paddingBottom: Math.max(insets.bottom + 8, 10),
-          },
+          tabBarStyle: getTabBarStyle(insets.bottom),
           tabBarActiveTintColor: '#1f6feb',
           tabBarInactiveTintColor: '#64748b',
           tabBarLabelStyle: styles.tabLabel,
@@ -142,24 +139,6 @@ function AppContent() {
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    height: 78,
-    paddingBottom: 10,
-    paddingTop: 8,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    borderTopWidth: 0,
-    backgroundColor: '#ffffff',
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: -2 },
-    elevation: 8,
-  },
   tabLabel: {
     fontSize: 10,
     fontWeight: '600',
