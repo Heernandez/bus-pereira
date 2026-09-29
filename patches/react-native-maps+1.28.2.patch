@@ -1,0 +1,40 @@
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
+index def61f5..9362e48 100644
+--- a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
+@@ -92,6 +92,8 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+     public GoogleMap map;
+     private Bundle savedMapState;
+     private ArrayList<MapFeature> savedFeatures = null;
++    // Identifies the latest attach; restores scheduled by earlier attaches are stale.
++    private int attachGeneration = 0;
+     private boolean shouldRestorePadding = false;
+ 
+     private MarkerManager markerManager;
+@@ -336,7 +338,13 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+             super.onStart();
+             super.onResume();
+             prepareAttacherView();
++            final int generation = ++attachGeneration;
+             getMapAsync((map)->{
++                // A detach/attach pair can run again before this callback (bottom tabs, app resume).
++                // Only the latest attach restores, or markers end up in an orphaned MarkerManager.
++                if (generation != attachGeneration) {
++                    return;
++                }
+                 onMapReady(map);
+                 if (savedFeatures != null && !savedFeatures.isEmpty()) {
+                     features.clear();
+@@ -385,7 +393,11 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+             Log.e("MapView", "Error during stop in onDetachedFromWindow: " + e.getMessage());
+         }
+ 
+-        savedFeatures = new ArrayList<>(features);
++        // While a restore is still pending, `features` is empty and savedFeatures holds the
++        // real overlays; overwriting it would drop every marker (react-native-maps#6015).
++        if (savedFeatures == null) {
++            savedFeatures = new ArrayList<>(features);
++        }
+         features.clear();
+         shouldRestorePadding = true;
+         removeView(attacherGroup);

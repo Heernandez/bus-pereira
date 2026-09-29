@@ -1,7 +1,7 @@
 import { startupSpan } from './startupTiming';
-import { USE_DUMMY_DATA } from './transit';
 import polyline from '@mapbox/polyline';
 import type { Coordinate } from '../data/catalog';
+import { logger } from './logger';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
@@ -26,8 +26,8 @@ function haversineMeters(a: Coordinate, b: Coordinate): number {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-// Pure and synchronous: used both as the dummy-mode result and as the caller's
-// visual fallback when the real API call fails, so the map never has a gap.
+// Pure and synchronous: the caller's visual fallback when the real API call
+// fails, so the map never has a gap.
 export function straightLineWalkingRoute(origin: Coordinate, destination: Coordinate): WalkingRoute {
   const distanceMeters = haversineMeters(origin, destination);
   return {
@@ -52,7 +52,6 @@ export async function getWalkingRoute(
   destination: Coordinate,
   signal?: AbortSignal,
 ): Promise<WalkingRoute> {
-  if (USE_DUMMY_DATA) return straightLineWalkingRoute(origin, destination);
   if (!GOOGLE_MAPS_API_KEY) throw new Error('Configura EXPO_PUBLIC_GOOGLE_MAPS_API_KEY para calcular rutas a pie.');
 
   const finish = startupSpan('Ruta a pie Directions');
@@ -70,13 +69,13 @@ export async function getWalkingRoute(
   let receivedResponse = false;
   try {
     // Never log the full URL: it contains the API key.
-    console.log(`[${new Date().toISOString()}] [Direcciones] GET directions mode=walking`);
+    logger.log(`[${new Date().toISOString()}] [Direcciones] GET directions mode=walking`);
     const response = await fetch(`${DIRECTIONS_URL}?${params.toString()}`, { signal: controller.signal });
     receivedResponse = true;
-    console.log(`[${new Date().toISOString()}] [Direcciones] GET directions -> HTTP ${response.status}`);
+    logger.log(`[${new Date().toISOString()}] [Direcciones] GET directions -> HTTP ${response.status}`);
     if (!response.ok) throw new Error(`El servicio de rutas a pie respondió con un error (${response.status}).`);
     const json = await response.json();
-    console.log(`[${new Date().toISOString()}] [Direcciones] status=${json.status}`);
+    logger.log(`[${new Date().toISOString()}] [Direcciones] status=${json.status}`);
     if (json.status !== 'OK') throw new Error(STATUS_MESSAGES[json.status] ?? `El servicio de rutas a pie devolvió un estado no reconocido (${json.status}).`);
     const leg = json.routes?.[0]?.legs?.[0];
     const points = json.routes?.[0]?.overview_polyline?.points;
@@ -88,7 +87,7 @@ export async function getWalkingRoute(
     finish(signal?.aborted ? 'cancelado' : controller.signal.aborted ? 'timeout' : 'error');
     if (!receivedResponse) {
       const reason = signal?.aborted ? 'cancelada' : controller.signal.aborted ? 'timeout' : 'error de red';
-      console.log(`[${new Date().toISOString()}] [Direcciones] GET directions -> sin respuesta HTTP (${reason})`);
+      logger.log(`[${new Date().toISOString()}] [Direcciones] GET directions -> sin respuesta HTTP (${reason})`);
     }
     if (signal?.aborted) throw error;
     if (controller.signal.aborted) throw new Error('El cálculo de la ruta a pie tardó demasiado. Intenta nuevamente.');

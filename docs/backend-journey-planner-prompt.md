@@ -90,7 +90,7 @@ export type JourneyResponse = {
   meta: {
     contractVersion: 1;
     generatedAt: string;
-    source: 'demo' | 'backend';
+    source: 'backend';
     // Required only for an empty result, which is different from service failure.
     noRouteReason?: 'outside_coverage' | 'no_service' | 'no_connection' | 'walking_limit';
   };

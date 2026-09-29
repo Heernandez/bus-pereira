@@ -49,10 +49,9 @@ HTTP no-200, timeout (12 s) o error de red se traducen igual que en `transit.ts`
 
 1. Se llama como máximo dos veces por selección de viaje: origen → estación de conexión de origen, y estación de conexión de destino → destino. No depende de qué ruta de bus esté seleccionada en el panel inferior.
 2. Se omite por completo (sin red) cuando ese extremo ya es una estación/parada.
-3. Modo dummy (`EXPO_PUBLIC_USE_DUMMY_DATA=true`): no hay red; se sintetiza al instante una línea recta con duración estimada a ~1.35 m/s, etiquetada `source: "straight-line"`.
-4. Modo API: mientras se resuelve la consulta real se muestra de inmediato esa misma línea recta como marcador de posición, que se reemplaza por la geometría real al llegar. El mapa nunca queda sin trazo de caminata.
-5. Cualquier falla (ver tabla de estados, HTTP, timeout o red) se registra con `console.warn('[Direcciones] ...')` y la app conserva la línea recta como respaldo visible, con un aviso no bloqueante en pantalla. No hay reintento manual: cambiar origen/destino, o invertirlos, dispara un nuevo cálculo.
-6. Cambiar de tarjeta de ruta de bus no recalcula ni redibuja la caminata: ya no se dibuja una vez por ruta visible, sino una sola vez por extremo (0, 1 o 2 polilíneas punteadas en total).
+3. Mientras se resuelve la consulta real se muestra de inmediato una línea recta (duración estimada a ~1.35 m/s, `source: "straight-line"`) como marcador de posición, que se reemplaza por la geometría real al llegar. El mapa nunca queda sin trazo de caminata.
+4. Cualquier falla (ver tabla de estados, HTTP, timeout o red) se registra con `logger.warn('[Direcciones] ...')` (solo en development) y la app conserva la línea recta como respaldo visible, con un aviso no bloqueante en pantalla. No hay reintento manual: cambiar origen/destino, o invertirlos, dispara un nuevo cálculo.
+5. Cambiar de tarjeta de ruta de bus no recalcula ni redibuja la caminata: ya no se dibuja una vez por ruta visible, sino una sola vez por extremo (0, 1 o 2 polilíneas punteadas en total).
 
 ## Diagnóstico
 
@@ -68,15 +67,14 @@ Reutiliza la misma key de `androidGoogleMapsApiKey`/`iosGoogleMapsApiKey` en `ap
 
 ## Validación
 
-Pruebas automáticas (`tests/services.test.cjs`) cubren: modo dummy sin red, decodificación de la polilínea real, cada `status` de Google, error HTTP, cancelación del llamador, timeout y falta de API key; además que la key nunca se imprima en los logs.
+Pruebas automáticas (`tests/services.test.cjs`) cubren: la línea recta de respaldo sin red, decodificación de la polilínea real, cada `status` de Google, error HTTP, cancelación del llamador, timeout y falta de API key; además que la key nunca se imprima en los logs.
 
 Verificar en dispositivo/emulador:
 
-1. `EXPO_PUBLIC_USE_DUMMY_DATA=true`: origen libre + estación destino; la caminata es instantánea, sin log `[Direcciones] GET`, con distancia/duración mostradas.
-2. `EXPO_PUBLIC_USE_DUMMY_DATA=false` con key válida y "Directions API" habilitada: la polilínea sigue calles reales (no una línea recta) y el log muestra `status=OK`.
-3. Cambiar de tarjeta de ruta de bus con el mismo origen/destino: la caminata no se recalcula ni redibuja.
-4. Cambiar origen/destino, o invertirlos: dispara un nuevo cálculo y actualiza el trazo/aviso.
-5. Origen y destino ambos estaciones: no aparece ninguna polilínea de caminata ni texto asociado, y no se llama a `getWalkingRoute`.
-6. Key inválida/revocada o `Directions API` deshabilitada: cae a línea recta con el aviso en pantalla; el resto de la pantalla (rutas de bus) sigue funcionando.
+1. Con key válida y "Directions API" habilitada: la polilínea sigue calles reales (no una línea recta) y el log muestra `status=OK`.
+2. Cambiar de tarjeta de ruta de bus con el mismo origen/destino: la caminata no se recalcula ni redibuja.
+3. Cambiar origen/destino, o invertirlos: dispara un nuevo cálculo y actualiza el trazo/aviso.
+4. Origen y destino ambos estaciones: no aparece ninguna polilínea de caminata ni texto asociado, y no se llama a `getWalkingRoute`.
+5. Key inválida/revocada o `Directions API` deshabilitada: cae a línea recta con el aviso en pantalla; el resto de la pantalla (rutas de bus) sigue funcionando.
 7. Sin `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` configurada en modo API: mismo resultado que el punto 6.
 8. Cortar red durante el cálculo real: se agota el timeout (~12 s) y cae al mismo respaldo, sin bloquear el resto de la pantalla.

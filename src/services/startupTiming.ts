@@ -1,5 +1,8 @@
+import { DEBUG_LOGS } from './logger';
+
 // Temporary diagnostics. No credentials, account identifiers or coordinates.
-const enabled = process.env.EXPO_PUBLIC_STARTUP_LOGS !== 'false';
+// Only in development; EXPO_PUBLIC_STARTUP_LOGS=false also silences them there.
+const enabled = DEBUG_LOGS && process.env.EXPO_PUBLIC_STARTUP_LOGS !== 'false';
 const now = () => globalThis.performance?.now() ?? Date.now();
 const startedAt = now();
 const run = Date.now().toString(36);

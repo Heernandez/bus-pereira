@@ -41,9 +41,9 @@ Solo usuario autenticado y activo. Devolver todos sus pasabordos, incluidos expi
 }
 ```
 
-`productId`: `round_trip`, `7_days`, `28_days`. `status`: `active` o `expired`; backend calcula vigencia y agotamiento de usos. Fechas ISO 8601; `expiresAt:null` sin vencimiento temporal; `remainingUses:null` ilimitados. `passes:[]` significa sin compras. Error HTTP no se presenta como lista vacía y ofrece reintento. No enviar credenciales de abordaje en este contrato; en modo API no se muestra el patrón QR ficticio de la demo. Compras, QR válido y NFC siguen pendientes.
+`productId`: `round_trip`, `7_days`, `28_days`. `status`: `active` o `expired`; backend calcula vigencia y agotamiento de usos. Fechas ISO 8601; `expiresAt:null` sin vencimiento temporal; `remainingUses:null` ilimitados. `passes:[]` significa sin compras. Error HTTP no se presenta como lista vacía y ofrece reintento. No enviar credenciales de abordaje en este contrato. Compras, QR válido y NFC siguen pendientes.
 
-Con `EXPO_PUBLIC_USE_DUMMY_DATA=true` no se consultan estos endpoints: no hay campaña y los tickets son simulados para una sesión Google activa. Google sigue siendo real. Con `false` se consulta el backend sin fallback a tickets ficticios. Los logs HTTP muestran URL/código, nunca Authorization ni el cuerpo.
+Se consulta siempre el backend, sin fallback a tickets ficticios. Los logs HTTP muestran URL/código, nunca Authorization ni el cuerpo.
 
 ## Verificación manual en dispositivo
 

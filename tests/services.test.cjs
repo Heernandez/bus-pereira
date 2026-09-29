@@ -16,6 +16,8 @@ require.extensions['.ts'] = (module, filename) => {
   });
   module._compile(result.outputText, filename);
 };
+// Log-leak tests below need debug logging on, as in a development build.
+process.env.EXPO_PUBLIC_APP_ENV = 'development';
 const { resolveLocationAccess } = require('../src/services/locationAccess.ts');
 function adapter(permission = { granted: true, canAskAgain: true, status: 'granted' }, services = true) {
   const calls = [];
@@ -61,26 +63,14 @@ test('native check failures propagate instead of being misreported as denied per
   broken.servicesEnabled = async () => { throw new Error('provider unavailable'); };
   await assert.rejects(resolveLocationAccess(broken), /provider unavailable/);
 });
-function service(dummy) {
-  process.env.EXPO_PUBLIC_USE_DUMMY_DATA = dummy ? 'true' : 'false';
+const catalogFixture = require('./fixtures/catalog.cjs');
+function service() {
   process.env.EXPO_PUBLIC_API_URL = 'http://backend.example/api/v1/';
   delete require.cache[require.resolve('../src/services/transit.ts')];
   return require('../src/services/transit.ts');
 }
-test('dummy mode makes no HTTP requests and keeps arrivals linked to their station', async t => {
-  t.mock.method(global, 'fetch', async () => { throw new Error('HTTP forbidden in dummy mode'); });
-  const api = service(true);
-  const catalog = await api.getCatalog();
-  assert.ok(catalog.routes.length > 0);
-  assert.ok(catalog.stations.every(stop => stop.type !== 'poi'));
-  const { data, meta } = await api.getArrivals(catalog.stations[0].id);
-  assert.equal(meta.source, 'demo');
-  assert.ok(data.arrivals.length > 0);
-  assert.ok(data.arrivals.every(item => item.variant.stopSequence.includes(data.station.id)));
-  assert.equal((await api.getProducts()).length, 3);
-});
-test('API mode uses the new endpoints and unwraps data without dummy fallback', async t => {
-  const api = service(false);
+test('API uses the backend endpoints and unwraps data', async t => {
+  const api = service();
   const urls = [];
   const responses = {
     '/city': { id: 'remote-city' }, '/stops': [], '/stations': [], '/routes': [], '/products': [],
@@ -100,7 +90,7 @@ test('API mode uses the new endpoints and unwraps data without dummy fallback', 
   assert.equal(urls.length, 6);
 });
 test('API failures are visible and caller cancellation aborts fetch', async t => {
-  const api = service(false);
+  const api = service();
   t.mock.method(global, 'fetch', async () => new Response('{}', { status: 503 }));
   await assert.rejects(api.getCatalog(), /503/);
   t.mock.method(global, 'fetch', async (_url, { signal }) => {
@@ -118,7 +108,7 @@ test('map selection replaces station with route; collapsing preserves station an
   assert.deepEqual(collapsed.selection, station.selection);
   const route = reduce(collapsed, { type: 'select', selection: { type: 'route', routeId: 'r1' } });
   assert.equal(route.selection.type, 'route');
-  assert.equal(route.selection.stationId, undefined);
+  assert.equal(route.selection.stationId, 's1');
   assert.deepEqual(reduce(route, { type: 'back' }).selection, station.selection);
   assert.equal(reduce(route, { type: 'clear' }).selection.type, 'none');
 });
@@ -174,41 +164,41 @@ test('WebSocket subscribes once, filters channel, reconnects and unsubscribes on
 });
 
 test('native backend arrivals and route shapes adapt without fabricating coordinates or ETA', async t => {
-  const { routeOptions, dummyStops } = require('../src/data/catalog.ts');
-  const route = structuredClone(routeOptions[0]);
+  const { stops } = catalogFixture;
+  const route = structuredClone(catalogFixture.route);
   const variant = route.variants[0];
   const rawBus = { busId: 'native-bus', vehicleId: 'native-bus', routeId: route.id, variantId: variant.id,
-    latitude: 4.81, longitude: -75.7, headingDegrees: 80, measuredAt: new Date().toISOString(), live: true, stale: false, nextStationId: dummyStops[1].id };
+    latitude: 4.81, longitude: -75.7, headingDegrees: 80, measuredAt: new Date().toISOString(), live: true, stale: false, nextStationId: stops[1].id };
   const rawArrival = { ...rawBus, id: 'arrival-1', route, variant, vehicle: { id: rawBus.busId, publicLabel: 'BUS 1' },
     lastPositionAt: rawBus.measuredAt, arrivalMinutes: 3, predictionSource: 'shape_speed' };
-  const api = service(false);
+  const api = service();
   t.mock.method(global, 'fetch', async url => new Response(JSON.stringify(url.endsWith('/arrivals')
-    ? { data: { station: dummyStops[0], servingRoutes: [{ route, variant }], arrivals: [rawArrival] }, meta: { source: 'live' } }
-    : { data: { route, variants: route.variants.map(v => ({ id: v.id, shape: v.geometry, stations: dummyStops })), buses: [rawBus], updatedAt: rawBus.measuredAt }, meta: { source: 'live' } })));
-  const station = await api.getArrivals(dummyStops[0].id);
+    ? { data: { station: stops[0], servingRoutes: [{ route, variant }], arrivals: [rawArrival] }, meta: { source: 'live' } }
+    : { data: { route, variants: route.variants.map(v => ({ id: v.id, shape: v.geometry, stations: stops })), buses: [rawBus], updatedAt: rawBus.measuredAt }, meta: { source: 'live' } })));
+  const station = await api.getArrivals(stops[0].id);
   assert.equal(station.data.buses[0].id, 'native-bus');
   assert.equal(station.data.buses[0].coordinate.latitude, 4.81);
   assert.equal(station.data.arrivals[0].predictionSource, 'gps');
   const live = await api.getRouteLive(route.id);
   assert.equal(live.data.buses[0].routeCode, route.code);
-  assert.equal(live.data.buses[0].nextStopId, dummyStops[1].id);
+  assert.equal(live.data.buses[0].nextStopId, stops[1].id);
   assert.equal(live.data.buses[0].etaMinutes, null);
   assert.equal(live.meta.liveAvailable, true);
   assert.equal(live.meta.refreshAfterSeconds, 30);
-  assert.equal(live.data.stops.length, dummyStops.length);
+  assert.equal(live.data.stops.length, stops.length);
   for (const shape of live.data.shapes) {
     const v = route.variants.find(v => v.id === shape.variantId);
     if (v.geometry.status !== 'ready') assert.deepEqual(shape.coordinates, []);
   }
 });
 
-test('route live fallback is limited to 404, never turns errors into dummy buses', async t => {
-  const api = service(false);
-  const { routeOptions, dummyStops } = require('../src/data/catalog.ts');
-  const route = structuredClone(routeOptions[0]);
+test('route live fallback is limited to 404, never fabricates buses from errors', async t => {
+  const api = service();
+  const { stops } = catalogFixture;
+  const route = structuredClone(catalogFixture.route);
   route.variants.forEach(v => { v.geometry = { provider: 'manual', status: 'pending', coordinates: [], encodedPolyline: null }; });
   t.mock.method(global, 'fetch', async url => url.endsWith('/live') ? new Response('{}', { status: 404 })
-    : new Response(JSON.stringify({ data: url.endsWith('/stops') ? dummyStops : route })));
+    : new Response(JSON.stringify({ data: url.endsWith('/stops') ? stops : route })));
   const live = await api.getRouteLive(route.id);
   assert.equal(live.meta.liveAvailable, false);
   assert.deepEqual(live.data.buses, []);
@@ -217,78 +207,8 @@ test('route live fallback is limited to 404, never turns errors into dummy buses
   await assert.rejects(api.getRouteLive(route.id), /500/);
 });
 
-test('dummy route preserves variant shapes and explicitly simulated moving buses', async () => {
-  const api = service(true);
-  const catalog = await api.getCatalog();
-  const live = await api.getRouteLive(catalog.routes[0].id);
-  assert.equal(live.meta.source, 'demo');
-  assert.ok(live.data.buses.length > 0);
-  assert.ok(live.data.buses.every(bus => bus.source === 'demo' && bus.live === false));
-  assert.ok(live.data.shapes.every(shape => catalog.routes[0].variants.some(v => v.id === shape.variantId)));
-});
-
-test('route segment slicing paints only boarding to alighting, never the full terminal-to-terminal shape', () => {
-  const { sliceRouteSegment, getVariantCoordinates, routeOptions, dummyStops } = require('../src/data/catalog.ts');
-  const variant = routeOptions[0].variants[0];
-  const shape = getVariantCoordinates(variant, dummyStops);
-  assert.ok(shape.length > 4, 'fixture should have a real multi-point shape to slice');
-  const stopCoordinates = variant.stopSequence.map(id => dummyStops.find(stop => stop.id === id));
-  const segment = sliceRouteSegment(shape, stopCoordinates, 0, 1);
-  assert.ok(segment.length < shape.length, 'segment between adjacent stops must be shorter than the whole route shape');
-  assert.ok(segment.length >= 2);
-  // Falls back to a direct two-point line instead of ever returning the untrimmed full shape.
-  assert.deepEqual(sliceRouteSegment([], stopCoordinates, 0, 1), [stopCoordinates[0], stopCoordinates[1]]);
-  assert.deepEqual(sliceRouteSegment([stopCoordinates[0]], stopCoordinates, 0, 1), [stopCoordinates[0], stopCoordinates[1]]);
-});
-
-test('slicing snaps stops in order so a nearby decoy point never outranks the real boarding stop', () => {
-  const { sliceRouteSegment } = require('../src/data/catalog.ts');
-  // S0 -- S1 -- S2(board) -- S3(alight), but the shape also has a decoy at index 1 with the
-  // exact same coordinates as S2, placed impossibly early (before the shape even reaches S1).
-  // A naive whole-array nearest search would latch onto that decoy and draw a detour back to it.
-  const stops = [
-    { latitude: 0, longitude: 0 }, // S0
-    { latitude: 1, longitude: 0 }, // S1
-    { latitude: 2, longitude: 0 }, // S2: boarding station
-    { latitude: 4, longitude: 0 }, // S3: alighting station
-  ];
-  const shape = [
-    { latitude: 0, longitude: 0 },   // 0: S0
-    { latitude: 2, longitude: 0 },   // 1: decoy, identical coords to S2
-    { latitude: 1, longitude: 0 },   // 2: S1 (true)
-    { latitude: 1.5, longitude: 0 }, // 3
-    { latitude: 2, longitude: 0 },   // 4: S2 (true)
-    { latitude: 3, longitude: 0 },   // 5
-    { latitude: 4, longitude: 0 },   // 6: S3 (true)
-  ];
-  const segment = sliceRouteSegment(shape, stops, 2, 3);
-  assert.deepEqual(segment, [shape[4], shape[5], shape[6]]);
-});
-
-test('nearest-stop candidates try alternatives so a real route is found even when the raw-nearest stop belongs to a different one', () => {
-  const { getNearestStops, hasDirectRoute, findDirectVariant } = require('../src/data/catalog.ts');
-  // Modeled on real production data: separate boarding/alighting bays a few meters apart
-  // (e.g. stop-bahia-de-ascenso-alimentadores / stop-bahia-de-descenso-alimentadores). Only the
-  // boarding bay is on the route to the destination; the alighting bay is not.
-  const boarding = { id: 'stop-boarding', name: 'Boarding bay', subtitle: '', latitude: 0.0003, longitude: 0.0003, type: 'station' };
-  const alighting = { id: 'stop-alighting', name: 'Alighting bay', subtitle: '', latitude: 0.0001, longitude: 0.0001, type: 'station' };
-  const destination = { id: 'stop-destination', name: 'Destination', subtitle: '', latitude: 1, longitude: 1, type: 'station' };
-  const origin = { latitude: 0, longitude: 0 }; // closer to the alighting bay, the raw-nearest of the two
-  const stops = [alighting, boarding, destination];
-  const candidates = getNearestStops(origin, stops);
-  assert.equal(candidates[0].id, 'stop-alighting', 'fixture sanity check: the wrong stop must be the raw-nearest');
-  const route = {
-    id: 'r1', code: 'R1', name: 'Route 1', description: '', mode: 'bus', color: '#000', duration: '', transfers: '', stops: '',
-    variants: [{ id: 'v1', direction: 'outbound', destinationName: 'Destination', stopSequence: ['stop-boarding', 'stop-destination'],
-      geometry: { provider: 'manual', status: 'pending', encodedPolyline: null, coordinates: [] } }],
-  };
-  assert.equal(findDirectVariant(route, candidates[0].id, destination.id), undefined, 'the raw-nearest stop alone would wrongly report no route');
-  const connected = candidates.find(candidate => hasDirectRoute([route], candidate.id, destination.id));
-  assert.equal(connected?.id, 'stop-boarding');
-});
-
 test('opening uses public campaign contract and deduplicates counted requests', async t => {
-  service(false);
+  service();
   delete require.cache[require.resolve('../src/services/startup.ts')];
   const api = require('../src/services/startup.ts');
   const campaign = { id: 'c1', name: 'Promoción', imageUrl: '/api/v1/campaigns/c1/image', displaySeconds: 12, maxViewsPerDevice: 3, activatedAt: '2026-09-19T20:00:00.000Z' };
@@ -317,7 +237,7 @@ test('opening uses public campaign contract and deduplicates counted requests', 
 });
 
 test('private passes distinguish server failure from empty history', async t => {
-  service(false);
+  service();
   delete require.cache[require.resolve('../src/services/startup.ts')];
   const api = require('../src/services/startup.ts');
   t.mock.method(global, 'fetch', async () => ({ ok: false, status: 403 }));
@@ -325,7 +245,7 @@ test('private passes distinguish server failure from empty history', async t => 
 });
 
  test('campaign null and failure are retained without counting a second request', async t => {
-  service(false);
+  service();
   delete require.cache[require.resolve('../src/services/startup.ts')];
   const api = require('../src/services/startup.ts');
   let calls = 0;
@@ -398,7 +318,7 @@ test('installation UUID is generated once, persisted and reused on subsequent la
 });
 
 test('failed identity persistence prevents campaign requests', async t => {
-  service(false);
+  service();
   delete require.cache[require.resolve('../src/services/startup.ts')];
   const { createOpeningCampaignLoader } = require('../src/services/startup.ts');
   const { createInstallationIdentity } = require('../src/services/installationIdentity.ts');
@@ -410,7 +330,7 @@ test('failed identity persistence prevents campaign requests', async t => {
 });
 
  test('campaign requests label iOS and skip unsupported platforms', async t => {
-  service(false);
+  service();
   delete require.cache[require.resolve('../src/services/startup.ts')];
   const { createOpeningCampaignLoader } = require('../src/services/startup.ts');
   const headers = [];
@@ -427,8 +347,7 @@ test('failed identity persistence prevents campaign requests', async t => {
 
 const geoPolyline = require('@mapbox/polyline');
 
-function walkingService(dummy, apiKey) {
-  service(dummy); // refreshes EXPO_PUBLIC_USE_DUMMY_DATA and transit.ts's cached copy first
+function walkingService(apiKey) {
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY = apiKey ?? '';
   delete require.cache[require.resolve('../src/services/walkingDirections.ts')];
   return require('../src/services/walkingDirections.ts');
@@ -437,10 +356,10 @@ function walkingService(dummy, apiKey) {
 const ORIGIN = { latitude: 4.8157, longitude: -75.6961 };
 const DESTINATION = { latitude: 4.8143, longitude: -75.6946 };
 
-test('dummy mode returns an instant straight line, never calling fetch', async t => {
-  t.mock.method(global, 'fetch', async () => { throw new Error('HTTP forbidden in dummy mode'); });
-  const api = walkingService(true);
-  const route = await api.getWalkingRoute(ORIGIN, DESTINATION);
+test('straight-line fallback is instant and never calls fetch', t => {
+  t.mock.method(global, 'fetch', async () => { throw new Error('fetch should not be called'); });
+  const api = walkingService();
+  const route = api.straightLineWalkingRoute(ORIGIN, DESTINATION);
   assert.equal(route.source, 'straight-line');
   assert.deepEqual(route.coordinates, [ORIGIN, DESTINATION]);
   assert.ok(route.distanceMeters > 0);
@@ -448,7 +367,7 @@ test('dummy mode returns an instant straight line, never calling fetch', async t
 });
 
 test('live mode decodes the real polyline and distance/duration on status OK', async t => {
-  const api = walkingService(false, 'test-key');
+  const api = walkingService('test-key');
   const points = geoPolyline.encode([[ORIGIN.latitude, ORIGIN.longitude], [DESTINATION.latitude, DESTINATION.longitude]]);
   t.mock.method(global, 'fetch', async () => new Response(JSON.stringify({
     status: 'OK',
@@ -462,7 +381,7 @@ test('live mode decodes the real polyline and distance/duration on status OK', a
 });
 
 test('every non-OK Google status rejects with a specific message', async t => {
-  const api = walkingService(false, 'test-key');
+  const api = walkingService('test-key');
   const cases = [
     ['ZERO_RESULTS', /no encontró una ruta/],
     ['NOT_FOUND', /ubicar alguno de los puntos/],
@@ -479,7 +398,7 @@ test('every non-OK Google status rejects with a specific message', async t => {
 });
 
 test('HTTP failure and caller cancellation are surfaced', async t => {
-  const api = walkingService(false, 'test-key');
+  const api = walkingService('test-key');
   t.mock.method(global, 'fetch', async () => new Response('{}', { status: 503 }));
   await assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION), /503/);
   t.mock.method(global, 'fetch', async (_url, { signal }) => {
@@ -492,7 +411,7 @@ test('HTTP failure and caller cancellation are surfaced', async t => {
 
 test('a stuck request times out and falls back to a clear message', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const api = walkingService(false, 'test-key');
+  const api = walkingService('test-key');
   t.mock.method(global, 'fetch', (_url, { signal }) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(new Error('aborted by timeout')));
   }));
@@ -502,13 +421,13 @@ test('a stuck request times out and falls back to a clear message', async t => {
 });
 
 test('missing API key rejects before ever calling fetch', async t => {
-  const api = walkingService(false, '');
+  const api = walkingService('');
   t.mock.method(global, 'fetch', async () => { throw new Error('fetch should not be called'); });
   await assert.rejects(api.getWalkingRoute(ORIGIN, DESTINATION), /EXPO_PUBLIC_GOOGLE_MAPS_API_KEY/);
 });
 
 test('the API key is never written to the logs', async t => {
-  const api = walkingService(false, 'super-secret-key');
+  const api = walkingService('super-secret-key');
   const logs = [];
   t.mock.method(console, 'log', (...args) => logs.push(args.join(' ')));
   const points = geoPolyline.encode([[ORIGIN.latitude, ORIGIN.longitude], [DESTINATION.latitude, DESTINATION.longitude]]);
@@ -518,4 +437,178 @@ test('the API key is never written to the logs', async t => {
   }), { status: 200 }));
   await api.getWalkingRoute(ORIGIN, DESTINATION);
   assert.ok(!logs.some(line => line.includes('super-secret-key')));
+});
+
+test('route and bus selections retain the station through direction changes and back navigation', () => {
+  const { initialMapState, mapSelectionReducer: reduce } = require('../src/services/mapSelection.ts');
+  const select = (state, selection) => reduce(state, { type: 'select', selection });
+  const station = select(initialMapState, { type: 'station', stationId: 'stop-a' });
+  const route = select(station, { type: 'route', routeId: 'r1', variantId: 'out' });
+  const inbound = select(route, { type: 'route', routeId: 'r1', variantId: 'in' });
+  const bus = select(inbound, { type: 'bus', routeId: 'r1', variantId: 'in', busId: 'bus1' });
+  assert.equal(route.selection.stationId, 'stop-a');
+  assert.equal(inbound.selection.stationId, 'stop-a');
+  assert.equal(bus.selection.stationId, 'stop-a');
+  assert.deepEqual(reduce(route, { type: 'back' }).selection, station.selection);
+  assert.equal(select(bus, { type: 'station', stationId: 'stop-b' }).selection.stationId, 'stop-b');
+  assert.equal(select(reduce(bus, { type: 'clear' }), { type: 'route', routeId: 'r1' }).selection.stationId, undefined);
+});
+
+test('route departures filter buses by route and sort station ETAs without mutating the response', () => {
+  const { departuresForRoute } = require('../src/services/stationArrivals.ts');
+  const variant = { id: 'v', stopSequence: ['s', 'end'] };
+  const arrival = (id, routeId, minutes, vehicle = { id }) => ({ id, route: { id: routeId, variants: [variant] }, variant, arrivalMinutes: minutes, vehicle });
+  const items = [
+    arrival('unknown', 'r1', null), arrival('later', 'r1', 8),
+    arrival('other', 'r2', 1), arrival('soon', 'r1', 2),
+    arrival('scheduled', 'r1', 1, null), arrival('here', 'r1', 0),
+  ];
+  assert.deepEqual(departuresForRoute(items, 's', 'r1').map(item => item.id), ['here', 'soon', 'later', 'unknown']);
+  assert.equal(items[0].id, 'unknown');
+  assert.deepEqual(departuresForRoute(items, 's', 'missing'), []);
+});
+test('journey departures select the boarding route and direction, preserving route-only filtering', () => {
+  const { departuresForRoute } = require('../src/services/stationArrivals.ts');
+  const outbound = { id: 'outbound', stopSequence: ['s', 'b'] }, inbound = { id: 'inbound', stopSequence: ['b', 's', 'a'] };
+  const make = (id, routeId, variant, minutes) => ({ id, route: { id: routeId, variants: [outbound, inbound] }, variant, vehicle: { id }, arrivalMinutes: minutes });
+  const arrivals = [
+    make('return-bus', 'r1', inbound, 1),
+    make('boarding-bus', 'r1', outbound, 4),
+    make('other-route', 'r2', outbound, 2),
+    make('boarding-first', 'r1', outbound, 2),
+  ];
+  assert.deepEqual(departuresForRoute(arrivals, 's', 'r1', 'outbound').map(item => item.id), ['boarding-first', 'boarding-bus']);
+  assert.deepEqual(departuresForRoute(arrivals, 's', 'r1').map(item => item.id), ['return-bus', 'boarding-first', 'boarding-bus']);
+  assert.deepEqual(departuresForRoute(arrivals, 's', 'r1', 'missing'), []);
+});
+test('at a terminal, a bus ending its trip departs on the next variant after the driver layover', () => {
+  const { stationDepartures, departureMinutes, departuresForRoute } = require('../src/services/stationArrivals.ts');
+  const outbound = { id: 'out', destinationName: 'Terminal', stopSequence: ['a', 'b', 'T'] };
+  const back = { id: 'back', destinationName: 'A', stopSequence: ['T', 'b', 'a'], layoverMinutes: 8 };
+  const route = { id: 'r1', code: '1', variants: [outbound, back] };
+  const arriving = { id: 'bus1-out', route, variant: outbound, vehicle: { id: 'bus1' }, arrivalMinutes: 5 };
+  const [departure] = stationDepartures([arriving], 'T');
+  assert.equal(departure.kind, 'terminal');
+  assert.equal(departure.variant.id, 'back');
+  assert.equal(departureMinutes(departure), 13);
+  // Journeys board the departing variant, so the arriving bus must still be found for it.
+  assert.deepEqual(departuresForRoute([arriving], 'T', 'r1', 'back').map(item => item.id), ['bus1-out']);
+  // The same bus listed again for its next trip is not shown twice.
+  const next = { id: 'bus1-back', route, variant: back, vehicle: { id: 'bus1' }, arrivalMinutes: 14 };
+  assert.deepEqual(stationDepartures([next, arriving], 'T').map(item => item.id), ['bus1-out']);
+  // Without layover data the arrival time is kept and flagged; passing stations are unchanged.
+  const unknown = stationDepartures([{ ...arriving, route: { ...route, variants: [outbound, { ...back, layoverMinutes: undefined }] } }], 'T')[0];
+  assert.equal(unknown.layoverMinutes, null);
+  assert.equal(departureMinutes(unknown), 5);
+  assert.equal(stationDepartures([arriving], 'b')[0].kind, 'pass');
+  // A line that ends without restarting here cannot be boarded.
+  assert.equal(stationDepartures([{ ...arriving, route: { ...route, variants: [outbound] } }], 'T')[0].kind, 'ends');
+});
+test('station routes collapse both directions into one chip per route', () => {
+  const { routesAtStation } = require('../src/services/stationArrivals.ts');
+  const route = (id, code) => ({ id, code });
+  const serving = [
+    { route: route('r10', 'C10'), variant: { id: 'r10-out', stopSequence: ['x', 'T'] } },
+    { route: route('r2', 'C2'), variant: { id: 'r2-out', stopSequence: ['T', 'y'] } },
+    { route: route('r10', 'C10'), variant: { id: 'r10-back', stopSequence: ['T', 'x'] } },
+    { route: route('r2', 'C2'), variant: { id: 'r2-back', stopSequence: ['y', 'T'] } },
+  ];
+  assert.deepEqual(routesAtStation(serving, 'T').map(item => [item.route.code, item.variant.id]), [['C2', 'r2-out'], ['C10', 'r10-back']]);
+});
+
+test('debug logs are written in development and silenced in production', t => {
+  const load = env => {
+    process.env.EXPO_PUBLIC_APP_ENV = env;
+    delete require.cache[require.resolve('../src/services/logger.ts')];
+    return require('../src/services/logger.ts');
+  };
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  t.mock.method(console, 'warn', (...args) => lines.push(args.join(' ')));
+  const production = load('production');
+  production.logger.log('oculto'); production.logger.warn('oculto');
+  assert.equal(production.DEBUG_LOGS, false);
+  // Unset: Node has no __DEV__, like a release bundle.
+  assert.equal(load('').APP_ENV, 'production');
+  const development = load('development');
+  development.logger.log('visible');
+  assert.deepEqual(lines, ['visible']);
+});
+
+function memoryStorage() {
+  const items = new Map();
+  return { items, getItem: async key => items.get(key) ?? null, setItem: async (key, value) => { items.set(key, value); }, removeItem: async key => { items.delete(key); } };
+}
+function catalogCache(storage = memoryStorage(), secrets = new Map()) {
+  const { createCatalogCache } = require('../src/services/catalogCache.ts');
+  const crypto = require('node:crypto');
+  return createCatalogCache({ storage, randomBytes: length => new Uint8Array(crypto.randomBytes(length)),
+    secrets: { getItemAsync: async key => secrets.get(key) ?? null, setItemAsync: async (key, value) => { secrets.set(key, value); } } });
+}
+const catalogData = { city: { id: 'pereira' }, stops: catalogFixture.stops, stations: catalogFixture.stops, routes: [catalogFixture.route] };
+
+test('catalog cache is encrypted at rest and rejects tampering or a lost key', async () => {
+  const storage = memoryStorage(), secrets = new Map();
+  const cache = catalogCache(storage, secrets);
+  await cache.write({ release: '7', savedAt: 1, data: catalogData });
+  const [stored] = storage.items.values();
+  assert.ok(!stored.includes('Estación'), 'station names must not be stored in plain text');
+  assert.deepEqual(await cache.read(), { release: '7', savedAt: 1, data: catalogData });
+  const [key] = storage.items.keys();
+  storage.items.set(key, stored.slice(0, -4) + (stored.endsWith('AAAA') ? 'BBBB' : 'AAAA'));
+  assert.equal(await cache.read(), null);
+  assert.equal(storage.items.size, 0, 'a tampered copy is discarded');
+  await cache.write({ release: '7', savedAt: 1, data: catalogData });
+  assert.equal(await catalogCache(storage, new Map()).read(), null, 'another key cannot decrypt it');
+});
+
+function catalogStore({ cached, release = '1', now = 1000 }) {
+  const { createCatalogStore } = require('../src/services/catalogStore.ts');
+  const calls = { catalog: 0, writes: [] };
+  const cache = { read: async () => cached ?? null, write: async value => { calls.writes.push(value); } };
+  const store = createCatalogStore({ cache, now: () => now,
+    fetchRelease: async () => { if (release instanceof Error) throw release; return release; },
+    fetchCatalog: async () => { calls.catalog++; return { ...catalogData, city: { id: 'fresh' } }; } });
+  return { store, calls, settle: () => new Promise(resolve => setTimeout(resolve, 0)) };
+}
+test('catalog downloads only when the backend release changes', async () => {
+  const same = catalogStore({ cached: { release: '1', savedAt: 0, data: catalogData } });
+  same.store.start(); await same.settle();
+  assert.equal(same.calls.catalog, 0);
+  assert.equal(same.store.getState().data.city.id, 'pereira');
+  const changed = catalogStore({ cached: { release: '1', savedAt: 999, data: catalogData }, release: '2' });
+  changed.store.start(); await changed.settle();
+  assert.equal(changed.calls.catalog, 1);
+  assert.equal(changed.store.getState().data.city.id, 'fresh');
+  assert.deepEqual(changed.calls.writes.map(item => item.release), ['2']);
+});
+test('without release support the cached catalog refreshes once a day', async () => {
+  const { CATALOG_MAX_AGE_MS } = require('../src/services/catalogStore.ts');
+  const fresh = catalogStore({ cached: { release: null, savedAt: 0, data: catalogData }, release: null, now: CATALOG_MAX_AGE_MS - 1 });
+  fresh.store.start(); await fresh.settle();
+  assert.equal(fresh.calls.catalog, 0);
+  const stale = catalogStore({ cached: { release: null, savedAt: 0, data: catalogData }, release: null, now: CATALOG_MAX_AGE_MS });
+  stale.store.start(); await stale.settle();
+  assert.equal(stale.calls.catalog, 1);
+});
+test('offline opening keeps the cached catalog; first opening without network shows an error', async () => {
+  const offline = catalogStore({ cached: { release: '1', savedAt: 0, data: catalogData }, release: new Error('network') });
+  offline.store.start(); await offline.settle();
+  assert.equal(offline.calls.catalog, 0);
+  assert.equal(offline.store.getState().data.city.id, 'pereira');
+  assert.equal(offline.store.getState().error, null);
+  const { createCatalogStore } = require('../src/services/catalogStore.ts');
+  const first = createCatalogStore({ cache: { read: async () => null, write: async () => {} },
+    fetchRelease: async () => { throw new Error('network'); }, fetchCatalog: async () => { throw new Error('Sin conexión'); } });
+  first.start(); await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(first.getState(), { data: null, error: 'Sin conexión' });
+});
+test('catalog release treats a missing endpoint as unsupported, not as an error', async t => {
+  const api = service();
+  t.mock.method(global, 'fetch', async () => new Response('{}', { status: 404 }));
+  assert.equal(await api.getCatalogRelease(), null);
+  t.mock.method(global, 'fetch', async () => Response.json({ data: { release: 42 } }));
+  assert.equal(await api.getCatalogRelease(), '42');
+  t.mock.method(global, 'fetch', async () => new Response('{}', { status: 500 }));
+  await assert.rejects(api.getCatalogRelease(), /500/);
 });

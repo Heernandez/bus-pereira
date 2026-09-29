@@ -55,7 +55,7 @@ Instalar con `adb install -r` conserva el historial: las visualizaciones realiza
 
 Los registros `[Campañas]` están disponibles también con los tiempos de apertura desactivados. Distinguen una campaña descartada por límite, un error al preparar la publicidad, un fallo o timeout de imagen y una imagen cargada correctamente.
 
-Persistencia local con AsyncStorage, clave `bus-pereira:campaign-views:v1`. Es por instalación, compartida entre cuentas; logout no borra el historial. Borrar datos/reinstalar puede reiniciarlo; no identifica físicamente un dispositivo ni garantiza límites entre instalaciones/restauraciones. No se almacenan imágenes ni tokens. Si falla la persistencia se omite la publicidad para no repetir sin control. Modo dummy no consulta ni limpia el historial real.
+Persistencia local con AsyncStorage, clave `bus-pereira:campaign-views:v1`. Es por instalación, compartida entre cuentas; logout no borra el historial. Borrar datos/reinstalar puede reiniciarlo; no identifica físicamente un dispositivo ni garantiza límites entre instalaciones/restauraciones. No se almacenan imágenes ni tokens. Si falla la persistencia se omite la publicidad para no repetir sin control.
 
 ## Cambio necesario en métricas del backend
 
@@ -77,7 +77,7 @@ X-Installation-ID: 550e8400-e29b-41d4-a716-446655440000
 X-Platform: ANDROID
 ```
 
-UUID v4 aleatorio generado con Expo Crypto durante la primera apertura que consulta campañas y persistido antes de enviar la petición. Las instalaciones existentes lo generan al ejecutar esta versión por primera vez. Permanece entre aperturas, logout y limpieza de contadores. No depende de Google, no es un identificador de hardware ni una credencial de autenticación. Borrar datos/reinstalar puede cambiarlo; las restauraciones de backup pueden conservarlo. En modo dummy no se genera para esta consulta.
+UUID v4 aleatorio generado con Expo Crypto durante la primera apertura que consulta campañas y persistido antes de enviar la petición. Las instalaciones existentes lo generan al ejecutar esta versión por primera vez. Permanece entre aperturas, logout y limpieza de contadores. No depende de Google, no es un identificador de hardware ni una credencial de autenticación. Borrar datos/reinstalar puede cambiarlo; las restauraciones de backup pueden conservarlo.
 
 Backend: leer el header (en Node normalmente `request.headers['x-installation-id']`), validar UUID v4 y registrar una relación única `(campaign_id, installation_id)` para cada campaña devuelta. Usar restricción UNIQUE/upsert para que consultas repetidas no incrementen el alcance único. Puede guardar `firstDeliveredAt`, `lastDeliveredAt`, `deliveryCount`. Permitir este header en CORS si se usa cliente web.
 

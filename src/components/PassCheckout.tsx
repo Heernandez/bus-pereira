@@ -3,7 +3,6 @@ import {Modal,Platform,Pressable,ScrollView,StyleSheet,Text,View} from 'react-na
 import {Ionicons} from '@expo/vector-icons';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {getPurchaseOptions,type PaymentMethod,type PurchaseOptions} from '../services/passWallet';
-import {USE_DUMMY_DATA} from '../services/transit';
 import {GooglePayMark} from './GooglePayMark';
 import {StatusBarSpacer} from './StatusBarSpacer';
 export type CheckoutProduct={type:string;name:string;price:string;detail:string;validity:string;usageLabel:string};
@@ -12,8 +11,7 @@ export function PassCheckout({product,busy,onBack,onConfirm}:{product:CheckoutPr
  const [options,setOptions]=useState<PurchaseOptions|null>(null),[error,setError]=useState<string|null>(null);
  const [other,setOther]=useState(false),[method,setMethod]=useState<PaymentMethod|null>(null),[attempt,setAttempt]=useState(0);
  useEffect(()=>{let active=true;setError(null);setOptions(null);
-  const request=USE_DUMMY_DATA?Promise.resolve({activationWindowSeconds:86400,paymentMode:'auto_approve',paymentMethods:['google_pay','apple_pay','card','pse'] as PaymentMethod[]}):getPurchaseOptions();
-  request.then(data=>{if(active)setOptions(data);}).catch(e=>{if(active)setError(e instanceof Error?e.message:'No se pudieron cargar las condiciones.');});
+  getPurchaseOptions().then(data=>{if(active)setOptions(data);}).catch(e=>{if(active)setError(e instanceof Error?e.message:'No se pudieron cargar las condiciones.');});
   return()=>{active=false;};
  },[attempt]);
  const wallet:PaymentMethod|null=Platform.OS==='ios'?'apple_pay':Platform.OS==='android'?'google_pay':null;

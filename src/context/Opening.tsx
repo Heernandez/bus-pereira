@@ -10,7 +10,7 @@ import { useSession } from './Session';
 import { getMyPasses, createOpeningCampaignLoader, type Campaign, type PurchasedPass } from '../services/startup';
 import { getInstallationId } from '../services/installation';
 import { campaignHistory } from '../services/campaignStorage';
-import { USE_DUMMY_DATA } from '../services/transit';
+import { logger } from '../services/logger';
 
 type PassState = { owner: string | null; passes: PurchasedPass[] | null; error: string | null };
 const PassContext = createContext<{ passes: PurchasedPass[] | null; error: string | null; reload: () => void }>({ passes: null, error: null, reload: () => {} });
@@ -65,7 +65,7 @@ export function OpeningProvider({ children, renderOpening }: { children: React.R
         startupLog('Campañas: respuesta validada', { count: campaigns.length });
         const storageDone = startupSpan('Campañas: leer y depurar contadores');
         try {
-          const eligible = USE_DUMMY_DATA || (Platform.OS !== 'android' && Platform.OS !== 'ios') ? [] : await campaignHistory.reconcile(campaigns);
+          const eligible = (Platform.OS !== 'android' && Platform.OS !== 'ios') ? [] : await campaignHistory.reconcile(campaigns);
           storageDone('ok', { eligible: eligible.length }); finish('ok');
           return eligible;
         } catch (error) { storageDone('error'); throw error; }
@@ -74,7 +74,7 @@ export function OpeningProvider({ children, renderOpening }: { children: React.R
     void prepared.current.then(campaigns => {
       if (active) setOpening({ done: true, campaigns });
     }).catch(error => {
-      console.warn('[Campañas] No se pudo preparar la publicidad', error instanceof Error ? error.message : String(error));
+      logger.warn('[Campañas] No se pudo preparar la publicidad', error instanceof Error ? error.message : String(error));
       if (active) setOpening({ done: true, campaigns: [] });
     });
     // Keep the single request through React effect cleanup/replay; request has its own timeout.
@@ -88,7 +88,7 @@ export function OpeningProvider({ children, renderOpening }: { children: React.R
       try {
         const tokenDone = startupSpan('Pasabordos: obtener token');
         let token: string;
-        try { token = USE_DUMMY_DATA ? '' : (await GoogleSignin.getTokens()).idToken; tokenDone(); }
+        try { token = (await GoogleSignin.getTokens()).idToken; tokenDone(); }
         catch (error) { tokenDone('error'); throw error; }
         if (controller.signal.aborted) return;
         const passes = await getMyPasses(token, controller.signal);

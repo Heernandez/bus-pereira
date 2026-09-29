@@ -21,9 +21,9 @@ import { useExploreReady } from '../context/ExploreReady';
 import { useLocationAccess } from '../context/LocationAccess';
 import { LocationGate } from '../components/LocationGate';
 import { DataStatus } from '../components/DataStatus';
-import { useRemoteData } from '../hooks/useRemoteData';
+import { useCatalog } from '../hooks/useCatalog';
 import { useLiveTransit, useStationArrivals } from '../hooks/useStationArrivals';
-import { getCatalog, getRouteLive, type LiveBus } from '../services/transit';
+import { getRouteLive, type LiveBus } from '../services/transit';
 import { StationDetail, RouteDetail, connectionLabel } from '../components/map/TransitDetail';
 import { TransitMap } from '../components/map/TransitMap';
 import { MapDetailSheet, sheetHeight } from '../components/map/MapDetailSheet';
@@ -37,6 +37,7 @@ export function ExploreScreen() {
   const { markNativeReady, markExploreReady } = useExploreReady();
   const [mapLoaded, setMapLoaded] = useState(false);
   const [mapTimedOut, setMapTimedOut] = useState(false);
+  const [mapSettled, setMapSettled] = useState(false);
   const [layoutReady, setLayoutReady] = useState(false);
   const insets = useSafeAreaInsets();
   const tabBarHeight = useBottomTabBarHeight();
@@ -49,14 +50,15 @@ export function ExploreScreen() {
   const focused = useIsFocused();
   const onViewLayout = useViewTiming('Explorar', focused);
   const location = useLocationAccess();
-  const catalog = useRemoteData(getCatalog);
+  const catalog = useCatalog();
   const [searchVisible, setSearchVisible] = useState(false);
   const [mapState, dispatch] = useReducer(mapSelectionReducer, initialMapState);
   const { selection } = mapState;
   const mapRef = useRef<MapView>(null);
   const [mapReady, setMapReady] = useState(false);
   const [searchText, setSearchText] = useState('');
-  const selectedLocation = selection.type === 'station' ? catalog.data?.stations.find(stop => stop.id === selection.stationId) : undefined;
+  const stationId = 'stationId' in selection ? selection.stationId : undefined;
+  const selectedLocation = catalog.data?.stations.find(stop => stop.id === stationId);
   const canInteract = location.state === 'ready' && focused;
   screenActive.current = canInteract;
   useEffect(() => () => { screenActive.current = false; }, []);
@@ -65,7 +67,7 @@ export function ExploreScreen() {
   const route = routeLive.data?.data.route;
   const variant = route?.variants.find(variant => (selection.type === 'route' || selection.type === 'bus') && variant.id === selection.variantId) ?? route?.variants[0];
 
-  const arrivals = useStationArrivals(selectedLocation?.id, selection.type === 'station' && canInteract);
+  const arrivals = useStationArrivals(stationId, !!stationId && canInteract);
   const userLocation = location.coordinate;
 
   useEffect(() => {
@@ -144,8 +146,15 @@ export function ExploreScreen() {
     }
   }, [layoutReady, mapReady, mapTimedOut, catalog.error, location.state, markNativeReady]);
   useEffect(() => {
-    if (layoutReady && (mapLoaded || mapTimedOut || catalog.error || (location.state !== 'checking' && location.state !== 'ready'))) { startupOnce('Explorar: listo para retirar cubierta React', { mapLoaded, mapTimedOut, catalogError: !!catalog.error, location: location.state }); markExploreReady(); }
-  }, [layoutReady, mapLoaded, mapTimedOut, catalog.error, location.state, markExploreReady]);
+    if (layoutReady && (mapLoaded || mapSettled || mapTimedOut || catalog.error || (location.state !== 'checking' && location.state !== 'ready'))) { startupOnce('Explorar: listo para retirar cubierta React', { mapLoaded, mapSettled, mapTimedOut, catalogError: !!catalog.error, location: location.state }); markExploreReady(); }
+  }, [layoutReady, mapLoaded, mapSettled, mapTimedOut, catalog.error, location.state, markExploreReady]);
+  // Google Maps does not finish drawing (onMapLoaded) while the React cover hides it, so waiting for it
+  // would deadlock until the 12 s timeout. Once the map is ready, give tiles a short grace and reveal.
+  useEffect(() => {
+    if (!mapReady || mapLoaded) return;
+    const timer = setTimeout(() => { startupLog('Mapa: listo sin onMapLoaded; se retira la cubierta', { graceMs: 600 }); setMapSettled(true); }, 600);
+    return () => clearTimeout(timer);
+  }, [mapReady, mapLoaded]);
   useEffect(() => {
     if (!catalog.data || mapLoaded) return;
     startupOnce('Mapa: catálogo disponible, esperando carga');
@@ -253,7 +262,7 @@ export function ExploreScreen() {
         subtitle={variant ? `Hacia ${variant.destinationName}` : 'Cargando recorrido'} expanded={mapState.sheet === 'expanded'}
         onExpand={expanded => dispatch({ type: 'sheet', value: expanded ? 'expanded' : 'collapsed' })}
         onBack={() => dispatch({ type: 'back' })} onClear={() => dispatch({ type: 'clear' })}>
-        <RouteDetail response={routeLive.data} variantId={variant?.id} selectedBusId={selection.type === 'bus' ? selection.busId : undefined}
+        <RouteDetail key={`${routeId}:${variant?.id}:${stationId}`} stationId={stationId} stationName={selectedLocation?.name} arrivals={arrivals} response={routeLive.data} variantId={variant?.id} selectedBusId={selection.type === 'bus' ? selection.busId : undefined}
           store={routeLive.store} connection={routeLive.connection} error={routeLive.error} retry={routeLive.retry} onSelect={selectRoute} />
       </MapDetailSheet>}
     </View></LocationGate>

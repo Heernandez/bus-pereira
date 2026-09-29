@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Coordinate } from '../data/catalog';
 import { getWalkingRoute, straightLineWalkingRoute, type WalkingRoute } from '../services/walkingDirections';
+import { logger } from '../services/logger';
 
 export type WalkingLeg = { route: WalkingRoute | null; loading: boolean; error: string | null };
 
@@ -19,7 +20,7 @@ export function useWalkingRoute(origin: Coordinate | null, destination: Coordina
       .catch(reason => {
         if (controller.signal.aborted) return;
         const message = reason instanceof Error ? reason.message : 'No pudimos calcular la ruta a pie.';
-        console.warn('[Direcciones] Usando línea recta de respaldo', message);
+        logger.warn('[Direcciones] Usando línea recta de respaldo', message);
         setState({ route: straightLineWalkingRoute(origin, destination), loading: false, error: message });
       });
     return () => controller.abort();

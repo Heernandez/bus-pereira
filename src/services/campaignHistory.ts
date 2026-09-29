@@ -1,4 +1,5 @@
 import type { Campaign } from './startup';
+import { logger } from './logger';
 
 type Storage = { getItem: (key: string) => Promise<string | null>; setItem: (key: string, value: string) => Promise<unknown> };
 const KEY = 'bus-pereira:campaign-views:v1';
@@ -30,7 +31,7 @@ export function createCampaignHistory(storage: Storage) {
       return campaigns.filter(campaign => {
         const views = counts.get(campaign.id) ?? 0;
         const eligible = views < campaign.maxViewsPerDevice;
-        console.info('[Campañas] Elegibilidad', { id: campaign.id, views, maxViewsPerDevice: campaign.maxViewsPerDevice, eligible });
+        logger.info('[Campañas] Elegibilidad', { id: campaign.id, views, maxViewsPerDevice: campaign.maxViewsPerDevice, eligible });
         return eligible;
       });
     }),

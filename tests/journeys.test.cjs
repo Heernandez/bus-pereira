@@ -15,28 +15,19 @@ require.extensions['.ts'] = (module, filename) => {
   }).outputText, filename);
 };
 
-function service(dummy = false) {
-  process.env.EXPO_PUBLIC_USE_DUMMY_DATA = String(dummy);
+function service() {
   process.env.EXPO_PUBLIC_API_URL = 'https://backend.example/api/v1/';
   for (const name of ['transit', 'journeys']) delete require.cache[require.resolve(`../src/services/${name}.ts`)];
   return require('../src/services/journeys.ts');
 }
-const { planDemoJourney } = require('../src/services/journeyDemo.ts');
 const { itineraryDuration, itineraryTitle, legInstruction } = require('../src/services/journeyPresentation.ts');
 const stop = (id, longitude) => ({ id, name: id, latitude: 4.81, longitude, type: 'stop', subtitle: '' });
 const stops = [stop('A', -75.73), stop('B', -75.71), stop('C', -75.69), stop('D', -75.67)];
-const route = (id, sequence) => ({ id, code: id, name: id, description: '', mode: 'bus', color: '#123456',
-  variants: [{ id: `${id}-out`, direction: 'outbound', destinationName: sequence.at(-1), stopSequence: sequence,
-    geometry: { coordinates: [], encodedPolyline: null, provider: 'mock', status: 'pending' } }] });
-const routes = [route('R1', ['A', 'B']), route('R2', ['B', 'C']), route('R3', ['C', 'D'])];
 const point = s => ({ latitude: s.latitude, longitude: s.longitude, stopId: s.id });
 const query = (overrides = {}) => ({ origin: point(stops[0]), destination: point(stops[2]),
   departureTime: '2026-09-21T15:00:00.000Z', preferences: { maxWalkingDistanceMeters: 500, maxTransfers: 2, optimize: 'fastest' }, ...overrides });
-const fixture = () => {
-  const result = planDemoJourney(query(), stops, routes);
-  result.meta.source = 'backend';
-  return result;
-};
+// Valid backend response for query(): A → C riding R1 then R2, transferring at B.
+const fixture = () => JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/journey-a-to-c.json'), 'utf8'));
 
 test('published backend handoff example is accepted unchanged by the mobile adapter', async t => {
   const api = service();
@@ -45,43 +36,12 @@ test('published backend handoff example is accepted unchanged by the mobile adap
   assert.deepEqual(await api.planJourney(example.request), example.response);
 });
 
-test('demo finds one and two transfers, respects direction and transfer limit', () => {
+test('a one-transfer itinerary parses and presents its transfer', () => {
   const api = service();
   const one = api.parseJourneyResponse(fixture()).data.itineraries[0];
   assert.equal(one.transfers, 1);
   assert.equal(itineraryTitle(one), 'R1 → R2');
   assert.match(legInstruction(one.legs[1], 1, one.legs), /Transborda al R2 en B/);
-  const two = planDemoJourney(query({ destination: point(stops[3]) }), stops, routes).data.itineraries[0];
-  assert.equal(two.transfers, 2);
-  assert.equal(planDemoJourney(query({ origin: point(stops[2]), destination: point(stops[0]) }), stops, routes).data.itineraries.length, 0);
-  assert.equal(planDemoJourney(query({ preferences: { ...query().preferences, maxTransfers: 0 } }), stops, routes).data.itineraries.length, 0);
-});
-
-test('free endpoints compare multiple stops and sum access plus egress walking', () => {
-  const nearby = stop('unserved-nearest', -75.7301);
-  const request = query({ origin: { latitude: 4.81, longitude: -75.7301 }, destination: { latitude: 4.81, longitude: -75.6899 } });
-  const result = planDemoJourney(request, [nearby, ...stops], routes).data.itineraries[0];
-  assert.equal(result.legs[0].mode, 'walk');
-  assert.equal(result.legs[1].from.stopId, 'A');
-  assert.equal(result.legs.at(-1).mode, 'walk');
-  assert.equal(result.walkingDistanceMeters, result.legs[0].distanceMeters + result.legs.at(-1).distanceMeters);
-  const limited = planDemoJourney({ ...request, preferences: { ...request.preferences, maxWalkingDistanceMeters: result.walkingDistanceMeters - 1 } }, stops, routes);
-  assert.equal(limited.data.itineraries.length, 0);
-});
-
-test('demo can return a walking-only journey and obeys preference ordering', () => {
-  const request = query({ destination: { latitude: 4.81, longitude: -75.7299 } });
-  const walk = planDemoJourney(request, stops, routes).data.itineraries[0];
-  assert.equal(itineraryTitle(walk), 'Todo a pie');
-  assert.equal(walk.transfers, 0);
-  assert.equal(walk.legs.length, 1);
-  const alternativeStops = [...stops, stop('near-C', -75.6901)];
-  const alternativeRoutes = [...routes, route('DIRECT', ['A', 'near-C'])];
-  const base = query({ destination: { latitude: stops[2].latitude, longitude: stops[2].longitude } });
-  const lessWalking = planDemoJourney({ ...base, preferences: { ...base.preferences, optimize: 'least_walking' } }, alternativeStops, alternativeRoutes);
-  assert.equal(lessWalking.data.itineraries[0].walkingDistanceMeters, 0);
-  const fewerTransfers = planDemoJourney({ ...base, preferences: { ...base.preferences, optimize: 'fewest_transfers' } }, alternativeStops, alternativeRoutes);
-  assert.equal(fewerTransfers.data.itineraries[0].transfers, 0);
 });
 
 test('POST sends raw endpoints and preferences, never preselects a nearest stop', async t => {
@@ -162,7 +122,7 @@ test('empty results are distinct from unavailable endpoint and HTTP errors; no f
   await assert.rejects(api.planJourney(query()), /incompatible/);
 });
 
-test('rejects results for different endpoints, excessive transfers and demo data in live mode', async t => {
+test('rejects results for different endpoints, excessive transfers and demo data', async t => {
   const api = service();
   t.mock.method(global, 'fetch', async () => Response.json(fixture()));
   await assert.rejects(api.planJourney(query({ destination: point(stops[3]) })), /incompatible/);
@@ -188,13 +148,3 @@ test('cancellation and timeout abort network requests; pre-aborted requests do n
   t.mock.timers.tick(15000); await timedOut;
 });
 
-test('dummy mode stays offline and produces valid responses for the bundled catalog', async t => {
-  const api = service(true);
-  const { dummyStops } = require('../src/data/catalog.ts');
-  t.mock.method(global, 'fetch', async () => { throw new Error('Unexpected network'); });
-  const realStops = dummyStops.filter(stop => stop.type !== 'poi');
-  for (const origin of realStops) {
-    const result = await api.planJourney(query({ origin: point(origin), destination: point(realStops.at(-1)) }));
-    assert.equal(result.meta.source, 'demo');
-  }
-});

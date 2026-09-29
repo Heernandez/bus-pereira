@@ -1,4 +1,4 @@
-export type ConnectionState = 'connecting' | 'live' | 'disconnected' | 'polling' | 'demo' | 'paused';
+export type ConnectionState = 'connecting' | 'live' | 'disconnected' | 'polling' | 'paused';
 export type LiveEvent = { type: 'bus_position' | 'arrival_update' | 'bus_removed' | 'arrival_removed' | 'snapshot_end'; channel: string; [key: string]: unknown };
 // React Native responds to the server's WebSocket ping control frames automatically.
 // No application-level ping: the backend accepts subscribe/unsubscribe only.

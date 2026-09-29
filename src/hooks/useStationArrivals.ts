@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
-import { getArrivals, USE_DUMMY_DATA, type ArrivalsResponse, type LiveBus, type Arrival } from '../services/transit';
+import { getArrivals, type ArrivalsResponse, type LiveBus, type Arrival } from '../services/transit';
 import type { RouteOption, RouteVariant } from '../data/catalog';
 import { backendArrival, backendBus } from '../services/liveProtocol';
 import { LiveBusStore } from '../services/liveBuses';
@@ -88,7 +88,7 @@ export function useLiveTransit<T extends Snapshot>(id: string | undefined, activ
       const current = new AbortController(); controller = current;
       clearTimeout(timer);
       const operation = (async () => {
-        let refresh = USE_DUMMY_DATA ? 2 : 30;
+        let refresh = 30;
         try {
           const value = await loader(id, current.signal);
           if (disposed || current.signal.aborted || epoch !== generation) return;
@@ -97,9 +97,8 @@ export function useLiveTransit<T extends Snapshot>(id: string | undefined, activ
           publish({ ...value, data: { ...value.data, buses: undefined } });
           buffered.forEach(applyEvent); buffered = []; lastLoadSucceeded = true;
           setError(null);
-          refresh = USE_DUMMY_DATA ? 2 : Math.max(10, Math.min(300, value.meta.refreshAfterSeconds || 30));
-          if (USE_DUMMY_DATA) setConnection('demo');
-          else if (!WS_URL || value.meta.liveAvailable === false) setConnection('polling');
+          refresh = Math.max(10, Math.min(300, value.meta.refreshAfterSeconds || 30));
+          if (!WS_URL || value.meta.liveAvailable === false) setConnection('polling');
           else if (!unsubscribe) {
             unsubscribe = subscribeLive({ url: WS_URL, channel, onState: state => { if (state === 'connecting') { snapshotBusIds = new Set(); snapshotArrivalIds = new Set(); } setConnection(state); }, onEvent: handleEvent, onReconnect: async () => { await load(); if (!lastLoadSucceeded) throw new Error('No se pudo sincronizar el estado inicial.'); } });
           }

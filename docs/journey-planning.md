@@ -3,8 +3,8 @@
 ## Estado de integración
 
 El móvil está preparado para un **contrato propuesto v1**. No se ha implementado ni verificado el backend desde este repositorio.
-`EXPO_PUBLIC_USE_DUMMY_DATA=false` activa `POST ${EXPO_PUBLIC_API_URL}/journeys/plan`; el URL base ya incluye el prefijo del API (por ejemplo `/api/v1`).
-Un backend sin ese endpoint muestra un mensaje de indisponibilidad y permite reintentar. No se vuelve silenciosamente al cálculo anterior ni a datos demo.
+Viaje llama a `POST ${EXPO_PUBLIC_API_URL}/journeys/plan`; el URL base ya incluye el prefijo del API (por ejemplo `/api/v1`).
+Un backend sin ese endpoint muestra un mensaje de indisponibilidad y permite reintentar. No se vuelve silenciosamente al cálculo anterior ni a datos locales.
 
 - Definiciones: [`src/types/journey.ts`](../src/types/journey.ts).
 - Consumo y validación: [`src/services/journeys.ts`](../src/services/journeys.ts).
@@ -51,16 +51,15 @@ Los campos completos y un ejemplo figuran en el prompt del backend.
 - Sin itinerarios: HTTP 200, lista vacía y `meta.noRouteReason` obligatorio: `outside_coverage`, `no_service`, `no_connection` o `walking_limit`. Omitir esa propiedad cuando hay resultados.
 - Un fallo del proveedor o del motor no es “sin ruta”: devolver error HTTP. El móvil distingue 400/422, 404/405/501, 429 y otros errores. Timeout del móvil: 15 s.
 
-## Demo y límites
+## Límites
 
-`EXPO_PUBLIC_USE_DUMMY_DATA=true` evita todas las llamadas de planificación. Usa solo el pequeño catálogo dummy, respeta el orden/sentido de las variantes y busca hasta dos transbordos en paradas compartidas. Compara varios puntos de acceso y egreso y puede devolver solo caminata.
-Las distancias peatonales son rectas; velocidad y espera son ficticias. La interfaz lo indica. No es un motor offline de producción y no infiere transbordos caminando entre paradas distintas.
+El móvil no tiene planificador propio: sin backend no hay itinerarios. Solo acepta respuestas con `meta.source: "backend"`.
 
 El servicio de Google Directions anterior permanece en el repositorio pero Viaje ya no lo usa. No se requieren nuevas dependencias nativas ni cambios de API keys para esta integración.
 
 ## Verificación
 
-`npm run typecheck` y `npm test` cubren contrato, transporte HTTP, errores, cancelación/timeout, datos inválidos, esperas desconocidas, destinos libres, dirección y conexiones del demo.
+`npm run typecheck` y `npm test` cubren contrato, transporte HTTP, errores, cancelación/timeout, datos inválidos, esperas desconocidas, esperas desconocidas y respuestas incompatibles.
 
 Verificar en dispositivo cuando el backend esté disponible:
 

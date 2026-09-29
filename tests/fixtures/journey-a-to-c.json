@@ -1,0 +1,114 @@
+{
+  "data": {
+    "itineraries": [
+      {
+        "id": "R1-out:0:1|R2-out:0:1",
+        "legs": [
+          {
+            "id": "R1-out:0:1",
+            "mode": "bus",
+            "from": {
+              "latitude": 4.81,
+              "longitude": -75.73,
+              "name": "A",
+              "stopId": "A"
+            },
+            "to": {
+              "latitude": 4.81,
+              "longitude": -75.71,
+              "name": "B",
+              "stopId": "B"
+            },
+            "routeId": "R1",
+            "variantId": "R1-out",
+            "routeCode": "R1",
+            "headsign": "B",
+            "color": "#123456",
+            "distanceMeters": 2216,
+            "durationSeconds": 370,
+            "waitSeconds": 180,
+            "timingSource": "estimated",
+            "geometry": {
+              "coordinates": [
+                {
+                  "id": "A",
+                  "name": "A",
+                  "latitude": 4.81,
+                  "longitude": -75.73,
+                  "type": "stop",
+                  "subtitle": ""
+                },
+                {
+                  "id": "B",
+                  "name": "B",
+                  "latitude": 4.81,
+                  "longitude": -75.71,
+                  "type": "stop",
+                  "subtitle": ""
+                }
+              ],
+              "source": "approximate"
+            }
+          },
+          {
+            "id": "R2-out:0:1",
+            "mode": "bus",
+            "from": {
+              "latitude": 4.81,
+              "longitude": -75.71,
+              "name": "B",
+              "stopId": "B"
+            },
+            "to": {
+              "latitude": 4.81,
+              "longitude": -75.69,
+              "name": "C",
+              "stopId": "C"
+            },
+            "routeId": "R2",
+            "variantId": "R2-out",
+            "routeCode": "R2",
+            "headsign": "C",
+            "color": "#123456",
+            "distanceMeters": 2216,
+            "durationSeconds": 370,
+            "waitSeconds": 180,
+            "timingSource": "estimated",
+            "geometry": {
+              "coordinates": [
+                {
+                  "id": "B",
+                  "name": "B",
+                  "latitude": 4.81,
+                  "longitude": -75.71,
+                  "type": "stop",
+                  "subtitle": ""
+                },
+                {
+                  "id": "C",
+                  "name": "C",
+                  "latitude": 4.81,
+                  "longitude": -75.69,
+                  "type": "stop",
+                  "subtitle": ""
+                }
+              ],
+              "source": "approximate"
+            }
+          }
+        ],
+        "walkingDistanceMeters": 0,
+        "transfers": 1,
+        "durationSeconds": 1100,
+        "warnings": [
+          "Simulación: caminatas aproximadas y tiempos de bus y espera ficticios."
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "contractVersion": 1,
+    "source": "backend",
+    "generatedAt": "2026-09-21T15:00:00.000Z"
+  }
+}

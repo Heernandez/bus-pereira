@@ -1,6 +1,6 @@
-import { API_URL, USE_DUMMY_DATA } from './transit';
-import { planDemoJourney } from './journeyDemo';
+import { API_URL } from './transit';
 import type { JourneyRequest, JourneyResponse } from '../types/journey';
+import { logger } from './logger';
 
 const invalid = () => new Error('El planificador devolvió un viaje incompleto o incompatible. Intenta nuevamente.');
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
@@ -17,7 +17,7 @@ const reasons = ['outside_coverage', 'no_service', 'no_connection', 'walking_lim
 export function parseJourneyResponse(value: unknown): JourneyResponse {
   if (!record(value) || !record(value.data) || !Array.isArray(value.data.itineraries) ||
       !record(value.meta) || value.meta.contractVersion !== 1 ||
-      !['backend', 'demo'].includes(String(value.meta.source)) || !text(value.meta.generatedAt) ||
+      value.meta.source !== 'backend' || !text(value.meta.generatedAt) ||
       !Number.isFinite(Date.parse(value.meta.generatedAt))) throw invalid();
   if (!value.data.itineraries.length && !reasons.includes(String(value.meta.noRouteReason))) throw invalid();
   if (value.data.itineraries.length && value.meta.noRouteReason !== undefined) throw invalid();
@@ -64,7 +64,6 @@ export function parseJourneyResponse(value: unknown): JourneyResponse {
 
 export async function planJourney(input: JourneyRequest, signal?: AbortSignal): Promise<JourneyResponse> {
   if (signal?.aborted) throw new Error('Consulta cancelada.');
-  if (USE_DUMMY_DATA) return parseJourneyResponse(planDemoJourney(input));
   if (!API_URL || !/^https?:\/\//.test(API_URL)) throw new Error('Configura EXPO_PUBLIC_API_URL para conectarte al servicio.');
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -73,7 +72,7 @@ export async function planJourney(input: JourneyRequest, signal?: AbortSignal): 
   try {
     const body = JSON.stringify(input);
     // Temporary payload diagnostics while integrating the journey planner.
-    console.log('[Viaje] POST /journeys/plan payload:', body);
+    logger.log('[Viaje] POST /journeys/plan payload:', body);
     // POST keeps precise user coordinates out of URLs and HTTP access logs.
     const response = await fetch(`${API_URL}/journeys/plan`, {
       method: 'POST', signal: controller.signal,
@@ -85,7 +84,6 @@ export async function planJourney(input: JourneyRequest, signal?: AbortSignal): 
     if (response.status === 429) throw new Error('Hay muchas consultas en este momento. Intenta nuevamente en unos segundos.');
     if (!response.ok) throw new Error('El planificador no está disponible en este momento. Intenta nuevamente.');
     const result = parseJourneyResponse(await response.json());
-    if (result.meta.source !== 'backend') throw invalid();
     for (const item of result.data.itineraries) {
       const from = item.legs[0].from;
       const to = item.legs[item.legs.length - 1].to;

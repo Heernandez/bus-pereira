@@ -1,4 +1,4 @@
-import { API_URL, request, USE_DUMMY_DATA } from './transit';
+import { API_URL, request } from './transit';
 
 export type Campaign = { id: string; imageUrl: string; durationSeconds: number; accessibilityLabel: string; maxViewsPerDevice: number };
 export type PurchasedPass = {
@@ -32,17 +32,15 @@ export function parseCampaigns(value: unknown): Campaign[] {
   return campaigns;
 }
 export async function getOpeningCampaign(installationId: string, platform: 'ANDROID' | 'IOS') {
-  if (USE_DUMMY_DATA) return [];
   const response = await request<{ data: unknown }>('/campaigns/active', undefined, { 'X-Installation-ID': installationId, 'X-Platform': platform });
   return parseCampaigns(response.data);
 }
 // Retain even a failed result: retrying this GET would count another view.
 export function createOpeningCampaignLoader(getInstallationId: () => Promise<string>, platform: string) {
   let pending: Promise<Campaign[]> | undefined;
-  return () => pending ??= USE_DUMMY_DATA || (platform !== 'android' && platform !== 'ios') ? Promise.resolve([]) : getInstallationId().then(id => getOpeningCampaign(id, platform === 'android' ? 'ANDROID' : 'IOS'));
+  return () => pending ??= (platform !== 'android' && platform !== 'ios') ? Promise.resolve([]) : getInstallationId().then(id => getOpeningCampaign(id, platform === 'android' ? 'ANDROID' : 'IOS'));
 }
 export async function getMyPasses(token: string, signal: AbortSignal): Promise<PurchasedPass[]> {
-  if (USE_DUMMY_DATA) return [];
   const response = await request<{ data: { passes: PurchasedPass[] } }>('/me/passes', signal, { Authorization: `Bearer ${token}` });
   if (!Array.isArray(response.data.passes) || response.data.passes.some(pass =>
     !pass || typeof pass.id !== 'string' || typeof pass.name !== 'string' || typeof pass.description !== 'string' ||

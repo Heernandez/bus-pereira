@@ -11,7 +11,7 @@
 | Estado local React; sin Redux/Zustand | Reducer local para selección y almacén local observable para posiciones |
 | Modal de estación | Sustituirlo por panel inferior no modal; conservar el Modal de búsqueda |
 | Sin librería BottomSheet | Panel con View/Animated/PanResponder existentes, sin dependencias nuevas |
-| transit.ts y hooks de consultas | Extenderlos; conservar variable dummy/API |
+| transit.ts y hooks de consultas | Extenderlos |
 | Sin cliente WebSocket | Añadir transporte nativo WebSocket dentro de services |
 
 No se creó otra app ni navegación, ni se modificó el backend. Durante el trabajo aparecieron endpoints live en el backend hermano: el adaptador consume ese contrato real, además de soportar versiones antiguas mediante un fallback explícito.
@@ -19,7 +19,7 @@ No se creó otra app ni navegación, ni se modificó el backend. Durante el trab
 ## Etapas y archivos
 
 1. **Selección y panel:** `src/services/mapSelection.ts`, `src/components/map/MapDetailSheet.tsx`, `src/screens/ExploreScreen.tsx`. Una selección principal; historial para Atrás; expansión independiente.
-2. **Buses en estación:** `src/services/transit.ts`, `src/components/map/BusMarker.tsx`. Posiciones dummy/REST y chip de bus con código de ruta.
+2. **Buses en estación:** `src/services/transit.ts`, `src/components/map/BusMarker.tsx`. Posiciones REST y chip de bus con código de ruta.
 3. **Tiempo real:** `src/services/liveTransport.ts`, `src/services/liveBuses.ts`, `src/hooks/useStationArrivals.ts`. REST primero, conexión al canal, bajas, reconexión y estado normalizado.
 4. **Ruta y cámara:** `transit.ts`, `ExploreScreen.tsx`. Consulta de ruta live, geometría por sentido y fitToCoordinates con espacio reservado al panel.
 5. **Detalle:** `src/components/map/TransitDetail.tsx`. Rutas de estación, próximos buses, ETA, incidencias, sentidos, paradas ordenadas y bus seleccionado.
@@ -42,14 +42,11 @@ Se verificó TypeScript, pruebas y exportación Android por etapas. No hay confi
 ## Variables
 
 ```dotenv
-EXPO_PUBLIC_USE_DUMMY_DATA=true
 EXPO_PUBLIC_API_URL=http://10.0.2.2:3000/api/v1
 EXPO_PUBLIC_WS_URL=
 ```
 
-Con `EXPO_PUBLIC_USE_DUMMY_DATA=true`, los buses se actualizan cada 2 segundos con movimiento de demostración sobre los recorridos locales, identificados como simulación. No se abre una conexión de red en ese modo. Con `false`, se consume el backend. El valor de `.env` determina el modo activo; `.env.example` propone `true`.
-
-Para API, usar `false`. Si `EXPO_PUBLIC_WS_URL` está vacío, se deriva de API_URL: `http://host/api/v1` → `ws://host/api/v1/live`; HTTPS → WSS. Se puede configurar explícitamente otro host. Cambiar `.env` requiere reiniciar Metro; en release requiere un nuevo bundle.
+Si `EXPO_PUBLIC_WS_URL` está vacío, se deriva de API_URL: `http://host/api/v1` → `ws://host/api/v1/live`; HTTPS → WSS. Se puede configurar explícitamente otro host. Cambiar `.env` requiere reiniciar Metro; en release requiere un nuevo bundle.
 
 ## REST del backend actual
 
