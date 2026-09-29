@@ -6,7 +6,8 @@ import type { RouteOption, RouteVariant } from '../../data/catalog';
 import { LiveBusStore, isRecentBus } from '../../services/liveBuses';
 import type { ConnectionState } from '../../services/liveTransport';
 import type { useStationArrivals } from '../../hooks/useStationArrivals';
-import { departureMinutes, departuresForRoute, routesAtStation, stationDepartures, type Departure } from '../../services/stationArrivals';
+import { departureAt, departureMinutes, departuresForRoute, routesAtStation, stationDepartures, type Departure } from '../../services/stationArrivals';
+import { describeService } from '../../services/serviceSchedule';
 import { DataStatus } from '../DataStatus';
 
 export function connectionLabel(state: ConnectionState) {
@@ -23,14 +24,20 @@ export function useFreshBus(bus: LiveBus | undefined) {
   return !!bus && isRecentBus(bus, Math.max(now, Date.now()));
 }
 type SelectRoute = (route: RouteOption, variant: RouteVariant, tripId?: string) => void;
-const formatMinutes = (minutes: number | null) => minutes === null ? 'Sin estimación' : minutes <= 0 ? 'Saliendo' : `${minutes} min`;
+// Far departures (usually scheduled) read better as a clock time than as minutes.
+function formatDeparture(minutes: number | null, at: Date | null) {
+  if (minutes === null) return 'Sin estimación';
+  if (minutes <= 0) return 'Saliendo';
+  if (minutes >= 60 && at) return at.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+  return `${minutes} min`;
+}
 function terminalNote(item: Departure, arrivalMinutes: number | null) {
   if (item.kind === 'ends') return 'Finaliza su recorrido aquí';
   if (item.kind !== 'terminal') return null;
   const arrives = arrivalMinutes === null ? 'Llega a la terminal' : `Llega en ${arrivalMinutes} min`;
   return item.layoverMinutes === null ? `${arrives}; sale después de la espera del conductor` : `${arrives} + ${item.layoverMinutes} min de espera en terminal`;
 }
-const DepartureRow = memo(function DepartureRow({ item, store, onSelect }: { item: Departure; store: LiveBusStore; onSelect: SelectRoute }) {
+const DepartureRow = memo(function DepartureRow({ item, store, onSelect }: { item: Departure; store: LiveBusStore; onSelect?: SelectRoute }) {
   const { arrival } = item;
   const bus = useBus(store, arrival.vehicle?.id ?? '');
   const fresh = useFreshBus(bus);
@@ -38,24 +45,28 @@ const DepartureRow = memo(function DepartureRow({ item, store, onSelect }: { ite
   const minutes = item.kind === 'ends' ? null : departureMinutes(item, arrivalMinutes);
   const label = bus?.source === 'demo' || arrival.predictionSource === 'demo' ? 'Simulación' : arrival.vehicle && !fresh ? 'Posición no disponible o antigua' : arrival.predictionSource === 'schedule' ? 'Según horario' : fresh && bus?.live ? 'GPS reciente' : 'Sin señal en vivo';
   const note = terminalNote(item, arrivalMinutes);
-  return <Pressable style={styles.card} accessibilityRole="button" accessibilityLabel={`Ver ruta ${arrival.route.code} hacia ${item.variant.destinationName}`} onPress={() => onSelect(arrival.route, item.variant, arrival.tripId ?? undefined)}>
+  const content = <>
     <View style={[styles.stripe, { backgroundColor: arrival.route.color }]} />
     <View style={styles.body}>
       <View style={styles.row}>
         <Text style={styles.code}>{arrival.route.code}</Text>
         <View style={styles.grow}><Text style={styles.name}>{arrival.route.name}</Text><Text style={styles.meta}>Hacia {item.variant.destinationName}</Text></View>
-        <Text style={styles.eta}>{item.kind === 'ends' ? '—' : formatMinutes(minutes)}</Text>
+        <Text style={styles.eta}>{item.kind === 'ends' ? '—' : formatDeparture(minutes, departureAt(item))}</Text>
       </View>
       {note && <Text style={styles.meta}>{note}</Text>}
       <Text style={styles.meta}>{label}</Text>
     </View>
-  </Pressable>;
+  </>;
+  // Read-only when no route selection is offered (station preview from a trip).
+  return onSelect
+    ? <Pressable style={styles.card} accessibilityRole="button" accessibilityLabel={`Ver ruta ${arrival.route.code} hacia ${item.variant.destinationName}`} onPress={() => onSelect(arrival.route, item.variant, arrival.tripId ?? undefined)}>{content}</Pressable>
+    : <View style={styles.card}>{content}</View>;
 });
 function Incidents({ items }: { items: ArrivalsResponse['data']['incidents'] }) {
   return <>{items?.map(item => <View key={item.id} style={styles.incident}><Text style={styles.name}>{item.title}</Text>{item.description && <Text style={styles.meta}>{item.description}</Text>}</View>)}</>;
 }
 export function StationDetail({ response, store, connection, error, retry, onSelect }: {
-  response: ArrivalsResponse | null; store: LiveBusStore; connection: ConnectionState; error: string | null; retry: () => void; onSelect: SelectRoute;
+  response: ArrivalsResponse | null; store: LiveBusStore; connection: ConnectionState; error: string | null; retry: () => void; onSelect?: SelectRoute;
 }) {
   if (!response) return <DataStatus error={error} retry={retry} />;
   const stationId = response.data.station.id;
@@ -66,11 +77,13 @@ export function StationDetail({ response, store, connection, error, retry, onSel
       <Text style={styles.status}>{connectionLabel(connection)}</Text>
       {error && <DataStatus error={error} retry={retry} />}
       <Text style={styles.section}>Rutas que pasan por aquí</Text>
-      <View style={styles.pills}>{routes.map(({ route, variant }) => <Pressable key={route.id} style={[styles.routeChip, { backgroundColor: route.color }]} onPress={() => onSelect(route, variant)} accessibilityRole="button" accessibilityLabel={`Ver ruta ${route.code}`}><Text style={styles.routeChipText}>{route.code}</Text></Pressable>)}</View>
+      <View style={styles.pills}>{routes.map(({ route, variant }) => onSelect
+        ? <Pressable key={route.id} style={[styles.routeChip, { backgroundColor: route.color }]} onPress={() => onSelect(route, variant)} accessibilityRole="button" accessibilityLabel={`Ver ruta ${route.code}`}><Text style={styles.routeChipText}>{route.code}</Text></Pressable>
+        : <View key={route.id} style={[styles.routeChip, { backgroundColor: route.color }]}><Text style={styles.routeChipText}>{route.code}</Text></View>)}</View>
       <Incidents items={response.data.incidents} />
       <Text style={styles.section}>Próximas salidas</Text>
     </>}
-    ListEmptyComponent={<Text style={styles.empty}>No hay salidas próximas por ahora.{routes.length ? ' Puedes seleccionar una ruta para ver su recorrido.' : ' No hay rutas registradas en esta estación.'}</Text>} />;
+    ListEmptyComponent={<Text style={styles.empty}>No hay salidas próximas por ahora.{routes.length ? onSelect ? ' Puedes seleccionar una ruta para ver su recorrido.' : '' : ' No hay rutas registradas en esta estación.'}</Text>} />;
 }
 const BusInfo = memo(function BusInfo({ store, id, selected, stops }: { store: LiveBusStore; id: string; selected: boolean; stops: RouteLiveResponse['data']['stops'] }) {
   const bus = useBus(store, id);
@@ -103,10 +116,10 @@ export function RouteStationArrivals({ routeId, variantId, stationName, arrivals
         <View style={styles.row}>
           <Text style={styles.code}>{item.arrival.route.code}</Text>
           <View style={styles.grow}>
-            <Text style={styles.name}>Bus {item.arrival.vehicle?.label || item.arrival.vehicle?.id}</Text>
+            <Text style={styles.name}>{item.arrival.vehicle ? `Bus ${item.arrival.vehicle.label || item.arrival.vehicle.id}` : 'Salida programada'}</Text>
             <Text style={styles.meta}>Hacia {item.variant.destinationName}</Text>
           </View>
-          <Text style={styles.eta}>{formatMinutes(departureMinutes(item))}</Text>
+          <Text style={styles.eta}>{formatDeparture(departureMinutes(item), departureAt(item))}</Text>
         </View>
         {terminalNote(item, item.arrival.arrivalMinutes) && <Text style={styles.meta}>{terminalNote(item, item.arrival.arrivalMinutes)}</Text>}
         <Text style={styles.meta}>{item.arrival.predictionSource === 'demo' ? 'Simulación' : item.arrival.predictionSource === 'schedule' ? 'Según horario' : 'Salida estimada desde esta parada'}</Text>
@@ -126,9 +139,13 @@ export function RouteDetail({ stationId, stationName, arrivals, response, varian
     <Text style={styles.status}>{connectionLabel(connection)}</Text>
     {response.meta.liveAvailable === false && <Text style={styles.empty}>El servicio de buses en vivo aún no está disponible para esta ruta.</Text>}
     {error && <DataStatus error={error} retry={retry} />}
-    <Text style={styles.meta}>ID de ruta: {route.id}</Text>
     <View style={styles.pills}>{route.variants.map(item => <Pressable key={item.id} style={[styles.pill, variant?.id === item.id && { borderColor: route.color }]} onPress={() => onSelect(route, item)} accessibilityRole="button"><Text style={styles.name}>{item.direction === 'outbound' ? 'Ida' : 'Regreso'}</Text><Text style={styles.meta}>{item.destinationName}</Text></Pressable>)}</View>
     {(!variant || !shapes.find(shape => shape.variantId === variant.id)?.coordinates.length) && <Text style={styles.empty}>Recorrido sin geometría disponible.</Text>}
+    {(!!describeService(variant?.frequencies).length || typeof variant?.layoverMinutes === 'number') && <>
+      <Text style={styles.section}>Horario</Text>
+      {describeService(variant?.frequencies).map(line => <Text key={line} style={styles.meta}>{line}</Text>)}
+      {typeof variant?.layoverMinutes === 'number' && <Text style={styles.meta}>Espera en {stops.find(stop => stop.id === variant.stopSequence[0])?.name ?? 'la terminal'} antes de salir: {variant.layoverMinutes} min</Text>}
+    </>}
     <Incidents items={response.data.incidents} />
     {stationId && arrivals ? <RouteStationArrivals routeId={route.id} stationName={stationName} arrivals={arrivals} /> : <><Text style={styles.section}>Buses de la ruta</Text><RouteBuses store={store} selectedBusId={selectedBusId} stops={stops} /></>}
     <Pressable style={styles.row} accessibilityRole="button" accessibilityState={{ expanded: stopsExpanded }} onPress={() => setStopsExpanded(value => !value)}>

@@ -111,6 +111,7 @@ La app espera respuestas con la forma `{ data, meta? }`. Los errores se muestran
 Contratos detallados en [`docs/`](docs):
 
 - [Release y caché del catálogo](docs/catalog-release.md)
+- [Horarios, frecuencias y espera en terminal](docs/service-schedule.md)
 - [Planificador de viajes](docs/journey-planning.md)
 - [Mapa en vivo](docs/live-map.md)
 - [Pasabordos](docs/passes.md)

@@ -1,10 +1,11 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { DataStatus } from '../DataStatus';
-import { formatDistance, itineraryColor, itineraryDuration, itineraryTitle, noJourneyMessage } from '../../services/journeyPresentation';
+import { formatClock, formatDistance, itineraryDuration, itineraryTitle, journeySchedule, legChips, noJourneyMessage } from '../../services/journeyPresentation';
+import { LegSummary } from './LegSummary';
 import type { useJourneyPlan } from '../../hooks/useJourneyPlan';
 import type { JourneyPreference } from '../../types/journey';
-import { preferenceLabels, transfersLabel, tripStyles, type PointMode, type TripPoint } from './shared';
+import { preferenceLabels, tripStyles, type PointMode, type TripPoint } from './shared';
 
 const fields = {
   origin: { label: 'Origen', placeholder: 'Selecciona tu punto de partida', icon: 'radio-button-on', iconSize: 14, color: '#1f6feb', locateLabel: 'Usar mi ubicación actual como origen' },
@@ -53,6 +54,7 @@ export function TripPlannerForm({
   bottomInset: number;
 }) {
   const itineraries = plan?.data?.data.itineraries ?? [];
+  const searchedAt = new Date(plan?.data?.meta.generatedAt ?? NaN);
   const searching = plan?.loading ?? false;
   const bothPoints = !!origin && !!destination;
   return (
@@ -120,19 +122,21 @@ export function TripPlannerForm({
             </View>
             <Pressable style={styles.collapseButton} onPress={plan.reload} accessibilityLabel="Actualizar viajes"><Ionicons name="refresh" size={18} color="#475569" /></Pressable>
           </View>
-          {itineraries.map(item => (
-            <Pressable key={item.id} style={styles.routeCard}
-              onPress={() => onOpenItinerary(item.id)} accessibilityRole="button"
-              accessibilityLabel={`Ver viaje ${itineraryTitle(item)} en el mapa`}>
-              <View style={[styles.routeStripe, { backgroundColor: itineraryColor(item) }]} />
-              <View style={styles.routeCardContent}>
-                <Text style={styles.routeName}>{itineraryTitle(item)}</Text>
-                <Text style={styles.routeDescription}>{transfersLabel(item.transfers)} · {formatDistance(item.walkingDistanceMeters)} a pie</Text>
-                <Text style={[styles.routeDuration, { marginTop: 8 }]}>{itineraryDuration(item)}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#94a3b8" />
-            </Pressable>
-          ))}
+          {itineraries.map(item => {
+            const schedule = journeySchedule(item, searchedAt);
+            const duration = itineraryDuration(item);
+            return (
+              <Pressable key={item.id} style={styles.routeCard}
+                onPress={() => onOpenItinerary(item.id)} accessibilityRole="button"
+                accessibilityLabel={`Ver viaje ${itineraryTitle(item)}${duration ? `, ${duration}` : ''}`}>
+                <View style={styles.cardTop}>
+                  <View style={styles.cardLegs}><LegSummary chips={legChips(item)} wrap /></View>
+                  {duration && <Text style={styles.routeDuration}>{duration}</Text>}
+                </View>
+                {schedule && <Text style={styles.routeDescription}>Sal a las {formatClock(schedule.leaveAt)} · Llegas {formatClock(schedule.arriveAt)}</Text>}
+              </Pressable>
+            );
+          })}
         </View>
       )}
     </ScrollView>
@@ -320,38 +324,32 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   routeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 16,
-    overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#e2e8f0',
     marginBottom: 12,
-    paddingRight: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  routeStripe: {
-    width: 5,
-    alignSelf: 'stretch',
+  cardTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
   },
-  routeCardContent: {
+  cardLegs: {
     flex: 1,
-    padding: 14,
-  },
-  routeName: {
-    color: '#111827',
-    fontSize: 15,
-    fontWeight: '800',
+    minWidth: 0,
   },
   routeDescription: {
     color: '#64748b',
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: 5,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 8,
   },
   routeDuration: {
     color: '#111827',
-    fontSize: 15,
+    fontSize: 20,
     fontWeight: '800',
   },
 });

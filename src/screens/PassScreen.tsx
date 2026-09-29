@@ -6,7 +6,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { useViewTiming } from '../hooks/useViewTiming';
 import React, { useEffect, useState, useRef } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useNavigation, type NavigationProp } from '@react-navigation/native';
+import { useNavigation, useRoute, type NavigationProp, type RouteProp } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSession } from '../context/Session';
 import { usePurchasedPasses } from '../context/Opening';
@@ -40,6 +40,14 @@ export function PassScreen() {
   const navigation = useNavigation<NavigationProp<{ Cuenta: undefined }>>();
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<'history' | 'buy'>('history');
+  // Other screens can open a given tab (e.g. "Compra aquí" from a trip); consume the request once.
+  const route = useRoute<RouteProp<{ Pasabordo: { tab?: 'buy' | 'history' } | undefined }, 'Pasabordo'>>();
+  const requestedTab = route.params?.tab;
+  useEffect(() => {
+    if (!requestedTab) return;
+    setTab(requestedTab);
+    navigation.setParams({ tab: undefined } as never);
+  }, [requestedTab, navigation]);
   const { account, busy, restoreError } = useSession();
   const purchased = usePurchasedPasses();
   const [buying,setBuying]=useState(false);

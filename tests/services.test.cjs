@@ -463,7 +463,8 @@ test('route departures filter buses by route and sort station ETAs without mutat
     arrival('other', 'r2', 1), arrival('soon', 'r1', 2),
     arrival('scheduled', 'r1', 1, null), arrival('here', 'r1', 0),
   ];
-  assert.deepEqual(departuresForRoute(items, 's', 'r1').map(item => item.id), ['here', 'soon', 'later', 'unknown']);
+  // Scheduled departures (no vehicle) are listed too, by time.
+  assert.deepEqual(departuresForRoute(items, 's', 'r1').map(item => item.id), ['here', 'scheduled', 'soon', 'later', 'unknown']);
   assert.equal(items[0].id, 'unknown');
   assert.deepEqual(departuresForRoute(items, 's', 'missing'), []);
 });
@@ -503,6 +504,31 @@ test('at a terminal, a bus ending its trip departs on the next variant after the
   assert.equal(stationDepartures([arriving], 'b')[0].kind, 'pass');
   // A line that ends without restarting here cannot be boarded.
   assert.equal(stationDepartures([{ ...arriving, route: { ...route, variants: [outbound] } }], 'T')[0].kind, 'ends');
+});
+test('scheduled terminal trips: departure time adds the layover, trips ending here are hidden', () => {
+  const { stationDepartures, departureAt } = require('../src/services/stationArrivals.ts');
+  const outbound = { id: 'out', stopSequence: ['a', 'T'] };
+  const back = { id: 'back', stopSequence: ['T', 'a'], layoverMinutes: 10 };
+  const route = { id: 'r1', variants: [outbound, back] };
+  const scheduled = (id, variant, extra = {}) => ({ id, route, variant, vehicle: null, arrivalMinutes: 30, estimatedArrivalAt: '2026-09-29T11:00:00.000Z', predictionSource: 'schedule', ...extra });
+  const [departure] = stationDepartures([scheduled('s1', outbound)], 'T');
+  assert.equal(departureAt(departure).toISOString(), '2026-09-29T11:10:00.000Z');
+  const withoutNext = { ...route, variants: [outbound] };
+  assert.deepEqual(stationDepartures([scheduled('s2', outbound, { route: withoutNext })], 'T'), []);
+});
+test('route schedule is described per day type and ignores malformed periods', () => {
+  const { describeService } = require('../src/services/serviceSchedule.ts');
+  assert.deepEqual(describeService([
+    { days: 'sunday_holiday', startTime: '06:00', endTime: '20:00', headwayMinutes: 15 },
+    { days: 'weekdays', startTime: '05:00', endTime: '24:30', headwayMinutes: 8 },
+    { days: 'weekdays', startTime: 'soon', endTime: '10:00', headwayMinutes: 8 },
+    { days: 'monday', startTime: '05:00', endTime: '10:00', headwayMinutes: 8 },
+    { days: 'saturday', startTime: '05:00', endTime: '21:00', headwayMinutes: 0 },
+  ]), [
+    'Lunes a viernes: 5:00 a. m.–12:30 a. m. · cada 8 min',
+    'Domingos y festivos: 6:00 a. m.–8:00 p. m. · cada 15 min',
+  ]);
+  assert.deepEqual(describeService(undefined), []);
 });
 test('station routes collapse both directions into one chip per route', () => {
   const { routesAtStation } = require('../src/services/stationArrivals.ts');
@@ -611,4 +637,16 @@ test('catalog release treats a missing endpoint as unsupported, not as an error'
   assert.equal(await api.getCatalogRelease(), '42');
   t.mock.method(global, 'fetch', async () => new Response('{}', { status: 500 }));
   await assert.rejects(api.getCatalogRelease(), /500/);
+});
+
+test('camera center shifts south so a point sits in the middle of the band visible above a sheet', () => {
+  const { centerShowingPointAbove, visibleCenterOffset } = require('../src/services/mapCamera.ts');
+  // 800 dp map, 40 dp status bar, sheet covering the bottom 440 dp: visible band 40..360, middle 200.
+  assert.equal(visibleCenterOffset(800, 40, 360), 200);
+  const station = { latitude: 4.8133, longitude: -75.6961 };
+  const center = centerShowingPointAbove(station, 16, 200);
+  assert.equal(center.longitude, station.longitude);
+  // At zoom 16 near Pereira one dp is ~2.38 m, so 200 dp is ~476 m (~0.0043°) south.
+  assert.ok(Math.abs(station.latitude - center.latitude - 0.00428) < 0.0001);
+  assert.deepEqual(centerShowingPointAbove(station, 16, 0), station);
 });

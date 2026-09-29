@@ -27,7 +27,7 @@ type RootTabParamList = {
   Explorar: undefined;
   Viaje: undefined;
   RutasFavoritas: undefined;
-  Pasabordo: undefined;
+  Pasabordo: { tab?: 'buy' | 'history' } | undefined;
   Cuenta: undefined;
 };
 

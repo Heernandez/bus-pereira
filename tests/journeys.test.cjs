@@ -84,7 +84,7 @@ test('unknown waits cannot be presented as a complete ETA', () => {
   assert.throws(() => api.parseJourneyResponse(response), /incompatible/);
   item.durationSeconds = null;
   api.parseJourneyResponse(response);
-  assert.equal(itineraryDuration(item), 'Tiempo total no disponible');
+  assert.equal(itineraryDuration(item), null);
   assert.match(legInstruction(item.legs[0], 0, item.legs), /Espera no disponible/);
 });
 
@@ -148,3 +148,60 @@ test('cancellation and timeout abort network requests; pre-aborted requests do n
   t.mock.timers.tick(15000); await timedOut;
 });
 
+
+const place = (name, stopId) => ({ name, latitude: 4.81, longitude: -75.7, ...(stopId ? { stopId } : {}) });
+const walkLeg = (id, from, to, minutes, meters = 300) => ({ id, mode: 'walk', from, to, durationSeconds: minutes * 60, distanceMeters: meters, geometry: { coordinates: [], source: 'network' } });
+const busLeg = (id, code, from, to, waitMinutes, minutes, extra = {}) => ({ id, mode: 'bus', routeId: `route-${code}`, variantId: `route-${code}-out`, routeCode: code, headsign: 'Centro', color: '#123456',
+  from, to, waitSeconds: waitMinutes === null ? null : waitMinutes * 60, durationSeconds: minutes * 60, distanceMeters: 5000, timingSource: 'schedule', geometry: { coordinates: [], source: 'network' }, ...extra });
+// Walk 7 → bus 41 (7 min wait, 31 min ride) → walk 1, searched at 08:48: like the reference app.
+const referenceTrip = () => ({ id: 'trip', transfers: 0, walkingDistanceMeters: 500, warnings: [], durationSeconds: 46 * 60, legs: [
+  walkLeg('w1', place('Casa'), place('Park House', 'A'), 7),
+  busLeg('b1', '41', place('Park House', 'A'), place('Friendship', 'D'), 7, 31),
+  walkLeg('w2', place('Friendship', 'D'), place('Friendship Inn'), 1, 50),
+] });
+
+test('journey schedule: leave by absorbs the first wait, arrival matches the total duration', () => {
+  const { journeySchedule } = require('../src/services/journeyPresentation.ts');
+  const from = new Date('2026-09-29T13:48:00.000Z');
+  const schedule = journeySchedule(referenceTrip(), from);
+  assert.equal(schedule.leaveAt.toISOString(), '2026-09-29T13:55:00.000Z');
+  assert.equal(schedule.legs.get('b1').start.toISOString(), '2026-09-29T14:02:00.000Z');
+  assert.equal(schedule.legs.get('b1').end.toISOString(), '2026-09-29T14:33:00.000Z');
+  assert.equal(schedule.arriveAt.toISOString(), '2026-09-29T14:34:00.000Z');
+  assert.equal(schedule.arriveAt.getTime() - from.getTime(), referenceTrip().durationSeconds * 1000);
+  const transfer = referenceTrip();
+  transfer.legs.splice(2, 0, busLeg('b2', '7', place('Friendship', 'D'), place('Otra', 'E'), 5, 10));
+  assert.equal(journeySchedule(transfer, from).legs.get('b2').start.toISOString(), '2026-09-29T14:38:00.000Z', 'later waits are transfers');
+  const unknown = referenceTrip(); unknown.legs[1].waitSeconds = null;
+  assert.equal(journeySchedule(unknown, from), null);
+  assert.equal(journeySchedule(referenceTrip(), new Date(NaN)), null);
+});
+test('journey summary chips and step rows follow the legs, skipping 0 m walking padding', () => {
+  const { legChips, journeySteps, journeySchedule } = require('../src/services/journeyPresentation.ts');
+  assert.deepEqual(legChips(referenceTrip()).map(chip => chip.kind === 'walk' ? `walk ${chip.minutes}` : `bus ${chip.code}`), ['walk 7', 'bus 41', 'walk 1']);
+  const padded = referenceTrip(); padded.legs[0] = walkLeg('w1', place('Park House', 'A'), place('Park House', 'A'), 0, 0);
+  assert.deepEqual(legChips(padded).map(chip => chip.kind), ['bus', 'walk']);
+  const steps = journeySteps(referenceTrip(), journeySchedule(referenceTrip(), new Date('2026-09-29T13:48:00.000Z')));
+  assert.deepEqual(steps.map(step => step.kind), ['start', 'walk', 'board', 'ride', 'alight', 'walk', 'end']);
+  assert.equal(steps.at(-1).name, 'Friendship Inn');
+  assert.equal(journeySteps(referenceTrip(), null)[0].at, null);
+});
+test('ride stop count comes from the catalog variant between boarding and alighting', () => {
+  const { rideStopCount } = require('../src/services/journeyPresentation.ts');
+  const routes = [{ id: 'route-41', variants: [{ id: 'route-41-out', stopSequence: ['Z', 'A', 'B', 'C', 'D', 'E'] }] }];
+  assert.equal(rideStopCount(routes, referenceTrip().legs[1]), 3);
+  assert.equal(rideStopCount([], referenceTrip().legs[1]), null);
+  assert.equal(rideStopCount(routes, { ...referenceTrip().legs[1], to: place('Atrás', 'Z') }), null);
+});
+test('a usable pass is active with time and uses left, or pending within its activation window', () => {
+  const { hasUsablePass } = require('../src/services/startup.ts');
+  const now = Date.parse('2026-09-29T12:00:00.000Z');
+  const pass = extra => ({ status: 'active', expiresAt: null, remainingUses: null, ...extra });
+  assert.equal(hasUsablePass([], now), false);
+  assert.equal(hasUsablePass([pass()], now), true);
+  assert.equal(hasUsablePass([pass({ remainingUses: 0 })], now), false);
+  assert.equal(hasUsablePass([pass({ expiresAt: '2026-09-29T11:00:00.000Z' })], now), false);
+  assert.equal(hasUsablePass([pass({ status: 'pending_activation', activateBefore: '2026-09-30T00:00:00.000Z' })], now), true);
+  assert.equal(hasUsablePass([pass({ status: 'pending_activation', activateBefore: '2026-09-29T10:00:00.000Z' })], now), false);
+  assert.equal(hasUsablePass([pass({ status: 'expired' }), pass({ status: 'activation_expired' })], now), false);
+});

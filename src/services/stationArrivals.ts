@@ -30,11 +30,18 @@ export function departureMinutes(item: Departure, arrivalMinutes = item.arrival.
   return arrivalMinutes === null ? null : arrivalMinutes + (item.layoverMinutes ?? 0);
 }
 
+export function departureAt(item: Departure): Date | null {
+  const at = item.arrival.estimatedArrivalAt ? Date.parse(item.arrival.estimatedArrivalAt) : NaN;
+  return Number.isFinite(at) ? new Date(at + (item.layoverMinutes ?? 0) * 60000) : null;
+}
+
 // Station predictions are authoritative: route bus ETAs refer to its next stop.
 export function stationDepartures(arrivals: Arrival[], stationId: string): Departure[] {
   const seen = new Set<string>();
   return arrivals.map(item => toDeparture(item, stationId))
     .sort((a, b) => (departureMinutes(a) ?? Infinity) - (departureMinutes(b) ?? Infinity) || a.id.localeCompare(b.id))
+    // A scheduled trip that ends here has nobody to pick up.
+    .filter(item => item.kind !== 'ends' || item.arrival.vehicle !== null)
     // The backend may also list the bus's next trip from the terminal; keep its earliest departure.
     .filter(item => {
       const key = item.arrival.vehicle ? `${item.arrival.vehicle.id}:${item.variant.id}` : item.id;
@@ -45,7 +52,7 @@ export function stationDepartures(arrivals: Arrival[], stationId: string): Depar
 }
 
 export function departuresForRoute(arrivals: Arrival[], stationId: string, routeId: string, variantId?: string): Departure[] {
-  return stationDepartures(arrivals.filter(item => item.vehicle !== null), stationId)
+  return stationDepartures(arrivals, stationId)
     .filter(item => item.arrival.route.id === routeId && (!variantId || item.variant.id === variantId));
 }
 

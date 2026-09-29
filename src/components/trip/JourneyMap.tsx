@@ -6,6 +6,10 @@ import { LiveBusMarker } from '../map/BusMarker';
 import type { LiveBusStore } from '../../services/liveBuses';
 import type { BusLeg, Itinerary } from '../../types/journey';
 
+const WALK_COLOR = '#374151';
+const ROUTE_COLOR = '#292923';
+const DIMMED_COLOR = '#a8adb5';
+
 // Draws an itinerary: walking and bus legs, boarding/alighting stops and the buses approaching the selected boarding stop.
 export function JourneyMap({ mapRef, itinerary, initialRegion, showsUserLocation, onReady, busLegs, selectedLeg, highlightSelected, onSelectLeg, arrivingBusIds, busStore, onSelectBus }: {
   mapRef: RefObject<MapView | null>; itinerary: Itinerary; initialRegion: Region; showsUserLocation: boolean; onReady: () => void;
@@ -25,6 +29,7 @@ export function JourneyMap({ mapRef, itinerary, initialRegion, showsUserLocation
       initialRegion={initialRegion}
       showsUserLocation={showsUserLocation}
       showsCompass
+      userInterfaceStyle="light"
     >
       <Marker coordinate={first.from} title="Origen" description={first.from.name} pinColor="#1f6feb" />
       <Marker coordinate={last.to} title="Destino" description={last.to.name} pinColor="#dc2626" />
@@ -37,18 +42,20 @@ export function JourneyMap({ mapRef, itinerary, initialRegion, showsUserLocation
             if (leg) onSelectLeg(leg);
           }} />
       ))}
-      {itinerary.legs.map(leg => (
-        <Fragment key={`${itinerary.id}:${leg.id}`}>
-          {leg.mode === 'bus' && <Polyline coordinates={leg.geometry.coordinates} strokeColor="#ffffff" strokeWidth={11} zIndex={1}
-            lineDashPattern={leg.geometry.source === 'approximate' ? [4, 6] : undefined} />}
-          <Polyline coordinates={leg.geometry.coordinates}
-            tappable={leg.mode === 'bus'}
-            onPress={() => { if (leg.mode === 'bus') onSelectLeg(leg); }}
-            strokeColor={leg.mode === 'bus' ? highlightSelected && leg.id !== selectedLeg?.id ? '#a8adb5' : '#292923' : '#475569'}
-            strokeWidth={leg.mode === 'bus' ? 7 : 3} zIndex={2}
-            lineDashPattern={leg.mode === 'walk' || leg.geometry.source === 'approximate' ? [4, 6] : undefined} />
-        </Fragment>
-      ))}
+      {itinerary.legs.map(leg => {
+        const key = `${itinerary.id}:${leg.id}`;
+        // Walking: thick round dots (Android draws any dash pattern as dots with round caps); the gap is in pixels.
+        if (leg.mode === 'walk') return <Polyline key={key} coordinates={leg.geometry.coordinates}
+          strokeColor={WALK_COLOR} strokeWidth={6} lineDashPattern={[1, 22]} zIndex={4} />;
+        // Bus: solid black over a white casing, same as a selected route in Explorar.
+        // Approximate geometry is flagged in the step list, not with a dashed line.
+        const dimmed = highlightSelected && leg.id !== selectedLeg?.id;
+        return <Fragment key={key}>
+          <Polyline coordinates={leg.geometry.coordinates} strokeColor="#ffffff" strokeWidth={11} zIndex={dimmed ? 1 : 5} />
+          <Polyline coordinates={leg.geometry.coordinates} tappable onPress={() => onSelectLeg(leg)}
+            strokeColor={dimmed ? DIMMED_COLOR : ROUTE_COLOR} strokeWidth={7} zIndex={dimmed ? 2 : 6} />
+        </Fragment>;
+      })}
       {arrivingBusIds.map(id => <LiveBusMarker key={id} id={id} store={busStore} selected={false} onSelect={onSelectBus} />)}
     </MapView>
   );

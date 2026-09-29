@@ -42,7 +42,8 @@ export function useLiveTransit<T extends Snapshot>(id: string | undefined, activ
       const snapshot = currentSnapshot;
       if (event.type === 'snapshot_end') {
         store.replace([...snapshotBusIds].flatMap(id => { const bus = store.get(id); return bus ? [bus] : []; }));
-        if (snapshot.data.arrivals) publish({ ...snapshot, data: { ...snapshot.data, arrivals: snapshot.data.arrivals.filter(item => snapshotArrivalIds.has(item.id)) } });
+        // Scheduled departures only come from REST (polled every refresh), never from the socket snapshot.
+        if (snapshot.data.arrivals) publish({ ...snapshot, data: { ...snapshot.data, arrivals: snapshot.data.arrivals.filter(item => snapshotArrivalIds.has(item.id) || (item.predictionSource === 'schedule' && item.vehicle === null)) } });
         return;
       }
       if (event.type === 'bus_position' || event.type === 'arrival_update') {

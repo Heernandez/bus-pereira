@@ -5,8 +5,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export const sheetHeight = (height: number, expanded: boolean) => expanded ? Math.min(440, height * 0.55) : 98;
 
-export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, showBackButton = true, onClear, bottomOffset = 86, children }: {
-  title: string; subtitle: string; expanded: boolean; onExpand: (expanded: boolean) => void;
+export function MapDetailSheet({ title, titleContent, subtitle, expanded, onExpand, onBack, showBackButton = true, onClear, bottomOffset = 86, children }: {
+  // titleContent replaces the title text visually; title stays for accessibility.
+  title: string; titleContent?: React.ReactNode; subtitle: string; expanded: boolean; onExpand: (expanded: boolean) => void;
   onBack: () => void; showBackButton?: boolean; onClear: () => void;
   // Extra clearance above the safe-area inset, for a tab bar still showing behind the sheet.
   bottomOffset?: number; children: React.ReactNode;
@@ -30,7 +31,7 @@ export function MapDetailSheet({ title, subtitle, expanded, onExpand, onBack, sh
     <View style={styles.header}>
       {showBackButton && <Pressable accessibilityRole="button" accessibilityLabel="Volver a la selección anterior" onPress={onBack} style={styles.control}><Ionicons name="arrow-back" size={22} color="#1f6feb" /></Pressable>}
       <Pressable style={styles.heading} onPress={() => onExpand(!expanded)} accessibilityRole="button" accessibilityLabel={`${title}. ${expanded ? 'Minimizar' : 'Expandir'}`}>
-        <Text style={styles.title} numberOfLines={1}>{title}</Text><Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
+        {titleContent ?? <Text style={styles.title} numberOfLines={1}>{title}</Text>}<Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
       </Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Minimizar detalle' : 'Expandir detalle'} onPress={() => onExpand(!expanded)} style={styles.control}><Ionicons name={expanded ? 'chevron-down' : 'chevron-up'} size={22} color="#475569" /></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Quitar selección del mapa" onPress={onClear} style={styles.control}><Ionicons name="close" size={22} color="#475569" /></Pressable>

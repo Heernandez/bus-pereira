@@ -52,3 +52,13 @@ export async function getMyPasses(token: string, signal: AbortSignal): Promise<P
   }
   return response.data.passes;
 }
+
+// Whether the user can travel now or soon: an active pass with time and uses left,
+// or a purchased one still within its activation window.
+export function hasUsablePass(passes: PurchasedPass[], now = Date.now()): boolean {
+  return passes.some(pass => {
+    if (pass.status === 'active') return pass.remainingUses !== 0 && (pass.expiresAt === null || Date.parse(pass.expiresAt) > now);
+    if (pass.status === 'pending_activation') return !pass.activateBefore || Date.parse(pass.activateBefore) > now;
+    return false;
+  });
+}

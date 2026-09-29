@@ -65,7 +65,7 @@ export const TransitMap = memo(function TransitMap({ mapRef, initialRegion, canI
   return <MapView ref={mapRef} provider={PROVIDER_GOOGLE} style={StyleSheet.absoluteFill}
     initialRegion={initialRegion} onMapReady={onReady} onMapLoaded={onLoaded}
     onRegionChangeComplete={onRegionChangeComplete} scrollEnabled={canInteract} zoomEnabled={canInteract}
-    showsMyLocationButton={false} rotateEnabled={canInteract} pitchEnabled={canInteract} showsTraffic={!routeStop} showsCompass showsUserLocation={canInteract && !!userLocation}>
+    showsMyLocationButton={false} rotateEnabled={canInteract} pitchEnabled={canInteract} showsTraffic={!routeStop} showsCompass userInterfaceStyle="light" showsUserLocation={canInteract && !!userLocation}>
     {stations.map((stop, index) => <StationMarker key={`${stop.id}:${index}`} stop={stop} selected={selectedStationId === stop.id} routeStop={routeStop} onSelect={onSelectStation} scale={scale} />)}
     {shape.length > 1 && <>
       <Polyline coordinates={shape} strokeColor="#ffffff" strokeWidth={11} zIndex={1} />

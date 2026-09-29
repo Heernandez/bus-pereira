@@ -1,4 +1,5 @@
 import polyline from '@mapbox/polyline';
+import type { ServicePeriod } from '../services/serviceSchedule';
 
 export type LocationType = 'stop' | 'station' | 'poi';
 
@@ -23,6 +24,8 @@ export type RouteVariant = {
   stopSequence: string[];
   // Minutes the driver waits at the first stop before starting this variant (terminal layover).
   layoverMinutes?: number | null;
+  // Scheduled service windows; absent while the backend does not publish them.
+  frequencies?: ServicePeriod[];
   geometry: {
     provider: 'mock' | 'google-routes' | 'manual';
     status: 'pending' | 'ready';

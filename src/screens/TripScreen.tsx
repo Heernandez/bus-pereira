@@ -1,6 +1,6 @@
 import { useViewTiming } from '../hooks/useViewTiming';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, BackHandler, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type MapView from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
@@ -11,18 +11,24 @@ import { LocationGate } from '../components/LocationGate';
 import { DataStatus } from '../components/DataStatus';
 import { StatusBarSpacer } from '../components/StatusBarSpacer';
 import { MapDetailSheet, sheetHeight } from '../components/map/MapDetailSheet';
+import { StationDetail, connectionLabel } from '../components/map/TransitDetail';
+import { centerShowingPointAbove, visibleCenterOffset } from '../services/mapCamera';
 import { TripPlannerForm } from '../components/trip/TripPlannerForm';
 import { MapPointPicker } from '../components/trip/MapPointPicker';
 import { JourneyMap } from '../components/trip/JourneyMap';
 import { JourneyDetail } from '../components/trip/JourneyDetail';
 import { JourneyOptionsModal } from '../components/trip/JourneyOptionsModal';
 import { LocationPickerModal } from '../components/trip/LocationPickerModal';
-import { transfersLabel, tripStyles, type PointMode, type TripOptions, type TripPoint } from '../components/trip/shared';
+import { tripStyles, type PointMode, type TripOptions, type TripPoint } from '../components/trip/shared';
 import { useStationArrivals } from '../hooks/useStationArrivals';
 import { departuresForRoute } from '../services/stationArrivals';
 import { useCatalog } from '../hooks/useCatalog';
 import { useJourneyPlan, type JourneyQuery } from '../hooks/useJourneyPlan';
-import { formatDistance, itineraryTitle, itineraryDuration, journeyTimeline } from '../services/journeyPresentation';
+import { formatClock, itineraryTitle, itineraryDuration, journeySchedule, journeySteps, legChips, rideStopCount } from '../services/journeyPresentation';
+import { LegSummary } from '../components/trip/LegSummary';
+import { useSession } from '../context/Session';
+import { usePurchasedPasses } from '../context/Opening';
+import { hasUsablePass } from '../services/startup';
 import { getTabBarStyle } from '../navigation/tabBar';
 import type { BusLeg } from '../types/journey';
 
@@ -33,7 +39,7 @@ export function TripScreen() {
   const insets = useSafeAreaInsets();
   const focused = useIsFocused();
   const onViewLayout = useViewTiming('Viaje', focused);
-  const navigation = useNavigation<BottomTabNavigationProp<{ Viaje: undefined }>>();
+  const navigation = useNavigation<BottomTabNavigationProp<{ Viaje: undefined; Pasabordo: { tab?: 'buy' | 'history' } | undefined }>>();
   const location = useLocationAccess();
   const catalog = useCatalog();
 
@@ -47,7 +53,7 @@ export function TripScreen() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [viewingDetail, setViewingDetail] = useState(false);
   const [detailExpanded, setDetailExpanded] = useState(false);
-  const closeDetail = () => { setViewingDetail(false); setDetailExpanded(false); };
+  const closeDetail = () => { setViewingDetail(false); setDetailExpanded(false); setPreviewStationId(null); };
   const [mapPickerTarget, setMapPickerTarget] = useState<PointMode | null>(null);
   const [options, setOptions] = useState<TripOptions>({ preference: 'fastest', maxWalkingDistanceMeters: 1500, maxTransfers: 2 });
   const [optionsVisible, setOptionsVisible] = useState(false);
@@ -69,28 +75,43 @@ export function TripScreen() {
   const itineraries = plan.data?.data.itineraries ?? [];
   const primaryItinerary = itineraries.find(item => item.id === selectedRouteId) ?? itineraries[0] ?? null;
   const [selectedLegId, setSelectedLegId] = useState<string | null>(null);
-  const [stepsExpanded, setStepsExpanded] = useState(false);
+  // Station opened with "Ver más" from a boarding stop; back returns to the trip.
+  const [previewStationId, setPreviewStationId] = useState<string | null>(null);
   const busLegs = primaryItinerary?.legs.filter((leg): leg is BusLeg => leg.mode === 'bus') ?? [];
   const selectedLeg = busLegs.find(leg => leg.id === selectedLegId) ?? busLegs[0];
   const selectJourneyLeg = (leg: BusLeg) => {
     setSelectedLegId(leg.id);
-    setStepsExpanded(false);
     setDetailExpanded(true);
   };
   const stationArrivals = useStationArrivals(selectedLeg?.from.stopId, canInteract && viewingDetail && !!selectedLeg?.from.stopId);
+  const previewArrivals = useStationArrivals(previewStationId ?? undefined, canInteract && viewingDetail && !!previewStationId);
+  const previewStation = catalog.data?.stations.find(station => station.id === previewStationId)
+    ?? catalog.data?.stops.find(stop => stop.id === previewStationId);
   const arrivingBusIds = [...new Set((selectedLeg?.from.stopId
     ? departuresForRoute(stationArrivals.data?.data.arrivals ?? [], selectedLeg.from.stopId, selectedLeg.routeId, selectedLeg.variantId)
     : []).flatMap(item => item.arrival.vehicle ? [item.arrival.vehicle.id] : []))];
-  const timeline = useMemo(() => primaryItinerary ? journeyTimeline(primaryItinerary) : [], [primaryItinerary]);
+  const schedule = useMemo(() => primaryItinerary ? journeySchedule(primaryItinerary, new Date(plan.data?.meta.generatedAt ?? NaN)) : null, [primaryItinerary, plan.data]);
+  const steps = useMemo(() => primaryItinerary ? journeySteps(primaryItinerary, schedule) : [], [primaryItinerary, schedule]);
+  const stopCount = (leg: BusLeg) => rideStopCount(catalog.data?.routes ?? [], leg);
+  // Suggest buying only when we know there is no usable pass (or no account to hold one).
+  const { account } = useSession();
+  const purchased = usePurchasedPasses();
+  const showPassOffer = !account || (purchased.passes !== null && !hasUsablePass(purchased.passes));
 
   useEffect(() => {
     if (!viewingDetail || !mapReady || !primaryItinerary) return;
+    if (previewStation) {
+      // Center the station in the map band still visible above the sheet, not behind it.
+      const up = visibleCenterOffset(height, insets.top, height - insets.bottom - sheetHeight(height, detailExpanded));
+      mapRef.current?.animateCamera({ center: centerShowingPointAbove(previewStation, 16, up), zoom: 16 }, { duration: 450 });
+      return;
+    }
     const top = 24 + insets.top;
     const bottom = 24 + insets.bottom + sheetHeight(height, detailExpanded);
     mapRef.current?.fitToCoordinates(selectedLegId && selectedLeg ? selectedLeg.geometry.coordinates : primaryItinerary.legs.flatMap(leg => leg.geometry.coordinates), {
       edgePadding: { top, bottom, left: 45, right: 45 }, animated: true,
     });
-  }, [viewingDetail, primaryItinerary, selectedLegId, selectedLeg, mapReady, height, detailExpanded, insets.top, insets.bottom]);
+  }, [viewingDetail, primaryItinerary, selectedLegId, selectedLeg, previewStation, mapReady, height, detailExpanded, insets.top, insets.bottom]);
 
   // Give the full screen to the map (route detail or picking a point) while its
   // own back button is visible; the parent Tab.Navigator reads this option back.
@@ -101,12 +122,12 @@ export function TripScreen() {
   useEffect(() => {
     if (!showingMap) return;
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (viewingDetail) { if (detailExpanded) setDetailExpanded(false); else closeDetail(); }
+      if (viewingDetail) { if (previewStationId) setPreviewStationId(null); else if (detailExpanded) setDetailExpanded(false); else closeDetail(); }
       else setMapPickerTarget(null);
       return true;
     });
     return () => subscription.remove();
-  }, [showingMap, viewingDetail, detailExpanded]);
+  }, [showingMap, viewingDetail, detailExpanded, previewStationId]);
 
   useEffect(() => { if (!canInteract) { setPickerVisible(false); setMapPickerTarget(null); setOptionsVisible(false); } }, [canInteract]);
 
@@ -206,7 +227,7 @@ export function TripScreen() {
 
   const openRoute = (itineraryId: string) => {
     setSelectedLegId(null);
-    setStepsExpanded(false);
+    setPreviewStationId(null);
     setSelectedRouteId(itineraryId);
     setDetailExpanded(true);
     setMapReady(false);
@@ -313,10 +334,29 @@ export function TripScreen() {
         </Pressable>
       )}
 
-      {viewingDetail && primaryItinerary && (
+      {viewingDetail && primaryItinerary && previewStationId && (
         <MapDetailSheet
-          title={itineraryTitle(primaryItinerary)}
-          subtitle={`${transfersLabel(primaryItinerary.transfers)} · ${formatDistance(primaryItinerary.walkingDistanceMeters)} a pie · ${itineraryDuration(primaryItinerary)}`}
+          title={previewStation?.name ?? 'Estación'}
+          subtitle={`${previewStation?.subtitle ? `${previewStation.subtitle} · ` : ''}${connectionLabel(previewArrivals.connection)}`}
+          expanded={detailExpanded}
+          onExpand={setDetailExpanded}
+          onBack={() => setPreviewStationId(null)}
+          bottomOffset={0}
+          onClear={clearTrip}
+        >
+          <StationDetail response={previewArrivals.data} store={previewArrivals.store} connection={previewArrivals.connection}
+            error={previewArrivals.error} retry={previewArrivals.retry} />
+        </MapDetailSheet>
+      )}
+
+      {viewingDetail && primaryItinerary && !previewStationId && (
+        <MapDetailSheet
+          title={[itineraryTitle(primaryItinerary), itineraryDuration(primaryItinerary)].filter(Boolean).join(', ')}
+          titleContent={<View style={styles.sheetTitle}>
+            <View style={{ flex: 1, minWidth: 0 }}><LegSummary chips={legChips(primaryItinerary)} /></View>
+            {itineraryDuration(primaryItinerary) && <Text style={styles.sheetDuration}>{itineraryDuration(primaryItinerary)}</Text>}
+          </View>}
+          subtitle={schedule ? `Sal a las ${formatClock(schedule.leaveAt)} · Llegas ${formatClock(schedule.arriveAt)}` : ''}
           expanded={detailExpanded}
           onExpand={setDetailExpanded}
           onBack={closeDetail}
@@ -325,15 +365,17 @@ export function TripScreen() {
           onClear={clearTrip}
         >
           <JourneyDetail
-            timeline={timeline}
-            busLegs={busLegs}
+            steps={steps}
+            stopCount={stopCount}
             selectedLeg={selectedLeg}
+            selectedArrivals={stationArrivals}
+            active={canInteract}
             showingSingleLeg={!!selectedLegId}
             onShowFullJourney={() => setSelectedLegId(null)}
             onSelectLeg={selectJourneyLeg}
-            stepsExpanded={stepsExpanded}
-            onToggleSteps={() => setStepsExpanded(value => !value)}
-            arrivals={stationArrivals}
+            onPreviewStation={stopId => { setPreviewStationId(stopId); setDetailExpanded(true); }}
+            showPassOffer={showPassOffer}
+            onBuyPass={() => navigation.navigate('Pasabordo', { tab: 'buy' })}
           />
         </MapDetailSheet>
       )}
@@ -365,6 +407,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  sheetTitle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sheetDuration: {
+    color: '#111827',
+    fontSize: 20,
+    fontWeight: '800',
   },
   locateButton: {
     position: 'absolute',

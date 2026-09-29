@@ -20,6 +20,7 @@ export function MapPointPicker({ mapRef, target, origin, destination, initialReg
         initialRegion={initialRegion}
         showsUserLocation={showsUserLocation}
         showsCompass
+        userInterfaceStyle="light"
         onPress={(event) => onPick(event.nativeEvent.coordinate)}
       >
         {target === 'destination' && origin && <Marker coordinate={origin} title="Origen" pinColor="#1f6feb" />}
